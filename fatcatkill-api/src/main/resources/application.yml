@@ -1,0 +1,23 @@
+spring:
+  config:
+    import: optional:file:../.env[.properties]
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${POSTGRES_USERNAME}
+    password: ${POSTGRES_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+server:
+  port: ${BACKEND_PORT}
+
+fatcatkill:
+  debug-actions: ${ENABLE_DEBUG_ACTIONS:false}
