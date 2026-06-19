@@ -1,4 +1,4 @@
-﻿import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig(({ mode }) => {
@@ -9,7 +9,13 @@ export default defineConfig(({ mode }) => {
     envDir: '..',
     plugins: [vue()],
     server: {
-      port
+      port,
+      proxy: {
+        '/socket.io': {
+          target: env.VITE_DEV_GATEWAY_URL || ('http://localhost:' + env.GATEWAY_PORT),
+          ws: true
+        }
+      }
     }
   }
 })

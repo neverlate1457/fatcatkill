@@ -27,7 +27,7 @@ BACKEND_CONTAINER_PORT=8080
 GATEWAY_PORT=8091
 GATEWAY_CONTAINER_PORT=3000
 FRONTEND_PORT=5173
-VITE_GATEWAY_URL=http://localhost:8091
+VITE_GATEWAY_URL=
 SPRING_PROFILES_ACTIVE=default
 ENABLE_DEBUG_ACTIONS=false
 ```
@@ -43,6 +43,8 @@ docker compose ps
 ```
 
 正式前端：`http://NAS位址:5173`
+
+正式部署請讓 `VITE_GATEWAY_URL` 保持空白。前端會透過同網域的 `/socket.io` 連到 Gateway，因此外網只需公開前端連接埠，不必另外公開 `GATEWAY_PORT`，也能避免 HTTPS mixed content。
 
 Backend 不會映射至 NAS 主機，只能由 Gateway 在 Docker 網路內存取。
 
