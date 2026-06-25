@@ -9,8 +9,8 @@ import com.fatcatkill.store.GameStore;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Comparator;
 import java.util.Map;
 
 @Service
@@ -50,7 +50,7 @@ public class DayService {
             GamePhase nextPhase = DAY_SEQUENCE[i];
             if (nextPhase == GamePhase.NIGHT_START) {
                 gameState.setCurrentRound(gameState.getCurrentRound() + 1);
-                gameState.setCurrentPhase(hasAliveStrActor(gameState)
+                gameState.setCurrentPhase(gameHelper.hasAliveStrActor(gameState)
                         ? GamePhase.STR_ACTION
                         : GamePhase.NIGHT_START);
                 return;
@@ -61,53 +61,6 @@ public class DayService {
         }
     }
 
-    private boolean hasAliveStrActor(GameState gameState) {
-        return gameState.getPlayers().stream()
-                .anyMatch(player -> player.isAlive()
-                        && (player.getRole() == Role.STR
-                        || (player.getRole() == Role.PH_SERVICE
-                        && gameState.getPhServiceStolenRole() == Role.STR)));
-    }
-
-    private void processDelayedDeaths(GameState gameState) {
-        if (gameState.getDelayedDeathRounds() == null || gameState.getDelayedDeathRounds().isEmpty()) {
-            return;
-        }
-
-        List<Long> duePlayerIds = gameState.getDelayedDeathRounds().entrySet().stream()
-                .filter(entry -> entry.getValue() <= gameState.getCurrentRound())
-                .map(Map.Entry::getKey)
-                .toList();
-
-        for (Long playerId : duePlayerIds) {
-            gameState.getDelayedDeathRounds().remove(playerId);
-            gameHelper.setDead(gameState, playerId, false);
-        }
-    }
-
-    private void restoreStrSeatNumbers(GameState gameState) {
-        if (gameState.getStrOriginalSeatNumbers() == null || gameState.getStrOriginalSeatNumbers().isEmpty()) {
-            if (gameState.getStrTemporarySeatNumbers() != null) {
-                gameState.getStrTemporarySeatNumbers().clear();
-            }
-            if (gameState.getStrSwappedSeatNumbers() != null) {
-                gameState.getStrSwappedSeatNumbers().clear();
-            }
-            return;
-        }
-
-        gameState.getPlayers().stream()
-                .filter(player -> gameState.getStrOriginalSeatNumbers().containsKey(player.getUserId()))
-                .forEach(player -> player.setSeatNumber(gameState.getStrOriginalSeatNumbers().get(player.getUserId())));
-
-        gameState.getStrOriginalSeatNumbers().clear();
-        if (gameState.getStrTemporarySeatNumbers() != null) {
-            gameState.getStrTemporarySeatNumbers().clear();
-        }
-        if (gameState.getStrSwappedSeatNumbers() != null) {
-            gameState.getStrSwappedSeatNumbers().clear();
-        }
-    }
 
     public void startVotingPhase(String roomId) {
         GameState gameState = gameStore.getGame(roomId);
@@ -116,13 +69,13 @@ public class DayService {
         }
 
         if (gameState.getCurrentPhase() == GamePhase.DAY_START) {
-            processDelayedDeaths(gameState);
+            gameHelper.processDelayedDeaths(gameState);
             checkImmediateWinOnly(gameState);
             if (gameState.getCurrentPhase() == GamePhase.GAME_OVER) {
                 gameStore.saveGame(gameState);
                 return;
             }
-            restoreStrSeatNumbers(gameState);
+            gameHelper.restoreStrSeatNumbers(gameState);
             clearDayVotingState(gameState);
             if (gameState.getLastDayVoterIds() != null) {
                 gameState.getLastDayVoterIds().clear();
@@ -367,7 +320,7 @@ public class DayService {
         recordLastVoteCounts(gameState, voteCounts);
 
         int yesVotes = voteCounts.getOrDefault(nominatedPlayerId, 0);
-        int aliveCount = (int) gameState.getPlayers().stream().filter(PlayerState::isAlive).count();
+        int aliveCount = gameHelper.countAlivePlayers(gameState);
         int majority = aliveCount / 2 + 1;
 
         if (yesVotes >= majority) {
@@ -406,16 +359,7 @@ public class DayService {
     }
 
     private Map<Long, Integer> collectVoteCounts(GameState gameState) {
-        Map<Long, Integer> voteCounts = new HashMap<>();
-        for (PlayerState player : gameState.getPlayers()) {
-            if ((player.isAlive() || gameState.getFinalVoteEligiblePlayerIds().contains(player.getUserId()))
-                    && !gameHelper.isDrunk(gameState, player.getUserId())
-                    && player.isVoteConfirmed() && player.getVotedTargetId() != null) {
-                Long targetId = player.getVotedTargetId();
-                voteCounts.put(targetId, voteCounts.getOrDefault(targetId, 0) + 1);
-            }
-        }
-        return voteCounts;
+        return gameHelper.collectConfirmedVoteCounts(gameState);
     }
 
     private void rememberDayVoters(GameState gameState) {
@@ -498,23 +442,8 @@ public class DayService {
         }
     }
 
-    private PlayerState getAlivePlayer(GameState game, Long playerId) {
-        PlayerState player = game.getPlayers().stream()
-                .filter(p -> p.getUserId().equals(playerId))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Player not found."));
-        if (!player.isAlive()) {
-            throw new IllegalStateException("Player is already dead.");
-        }
-        return player;
-    }
-
     private PlayerState getVotingPlayer(GameState game, Long playerId) {
-        PlayerState player = gameHelper.getPlayer(game, playerId);
-        if (!player.isAlive() && !game.getFinalVoteEligiblePlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Player is not eligible to vote.");
-        }
-        return player;
+        return gameHelper.validateVotingPlayer(game, playerId);
     }
 
     public String saltedFishStab(String roomId, Long playerId, Long targetId) {
@@ -540,7 +469,7 @@ public class DayService {
             throw new IllegalArgumentException("Salted Fish cannot stab himself.");
         }
 
-        PlayerState target = getAlivePlayer(gameState, targetId);
+        PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
         if (gameState.getSaltedFishUsedPlayerIds() != null) {
             gameState.getSaltedFishUsedPlayerIds().add(playerId);
         }

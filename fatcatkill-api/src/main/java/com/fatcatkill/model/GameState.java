@@ -26,6 +26,10 @@ public class GameState {
     private String startedAt;
     private boolean historyRecorded;
     private Camp winnerCamp;
+    private boolean hostMode;
+    private List<Role> hostConfiguredFatcatHintRoles;
+    private Role hostConfiguredHighRabbitRole;
+    private Long hostConfiguredMethaneHallucinationTargetId;
     private Map<String, Long> nightActions = new ConcurrentHashMap<>();
 
     private Long methaneHallucinationTargetId;

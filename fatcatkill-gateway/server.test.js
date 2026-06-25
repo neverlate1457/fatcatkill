@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { allowedRoute, bindActorIdentity, hostOnlyRoute, sanitizeGameState, validateIdentityClaim } = require('./server');
+const { allowedRoute, bindActorIdentity, connectedPlayersForRoom, hostOnlyRoute, sanitizeGameState, validateIdentityClaim } = require('./server');
 
 test('route allowlist rejects arbitrary and cross-room endpoints', () => {
   assert.equal(allowedRoute('POST', '/game/action', '1234'), true);
@@ -43,6 +43,25 @@ test('sanitized state hides other players and secret state', () => {
   assert.deepEqual(state.strOriginalSeatNumbers, {});
   assert.deepEqual(state.lastDayVoterIds, []);
 });
+test('host spectator receives full game state', () => {
+  const game = {
+    currentPhase: 'METHANE_ACTION',
+    players: [
+      { userId: 1, role: 'FATCAT', alive: true },
+      { userId: 2, role: 'METHANE', alive: true }
+    ],
+    nightActions: { FATCAT_KILL: 2 },
+    logs: [{ actionType: 'FATCAT_KILL' }]
+  };
+
+  const state = sanitizeGameState(game, 99, true);
+  assert.equal(state.currentPhase, 'METHANE_ACTION');
+  assert.equal(state.players[0].role, 'FATCAT');
+  assert.equal(state.players[1].role, 'METHANE');
+  assert.equal(state.nightActions.FATCAT_KILL, 2);
+  assert.equal(state.logs.length, 1);
+});
+
 test('night phase is visible only to its acting role', () => {
   const game = {
     currentPhase: 'METHANE_ACTION',
@@ -57,6 +76,27 @@ test('night phase is visible only to its acting role', () => {
   assert.equal(sanitizeGameState(game, 1).currentPhase, 'NIGHT_WAITING');
   assert.equal(sanitizeGameState(game, 2).currentPhase, 'METHANE_ACTION');
 });
+test('High Energy Rabbit illusion reveals the perceived role ability phase', () => {
+  const game = {
+    currentPhase: 'METHANE_ACTION',
+    players: [{ userId: 1, role: 'HIGH_RABBIT', alive: true }],
+    privateMessages: {},
+    highRabbitPerceivedRoles: { 1: 'METHANE' }
+  };
+
+  const state = sanitizeGameState(game, 1);
+  assert.equal(state.currentPhase, 'METHANE_ACTION');
+  assert.equal(state.highRabbitPerceivedRoles[1], 'METHANE');
+});
+
+test('fill-bot player payload excludes host spectators', () => {
+  const participants = new Map([
+    ['host', { userId: 99, nickname: 'Host', isSpectator: true }],
+    ['player', { userId: 7, nickname: 'Human', isSpectator: false }]
+  ]);
+  assert.deepEqual(connectedPlayersForRoom(participants), [{ userId: 7, nickname: 'Human' }]);
+});
+
 test('bot automation and room setup are host-only', () => {
   assert.equal(hostOnlyRoute('POST', '/game/bot/auto'), true);
   assert.equal(hostOnlyRoute('POST', '/room/start/1234'), true);

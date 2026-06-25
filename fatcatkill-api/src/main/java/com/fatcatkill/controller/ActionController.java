@@ -2,8 +2,10 @@ package com.fatcatkill.controller;
 
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.service.BotService;
 import com.fatcatkill.service.DayService;
+import com.fatcatkill.service.GameHelperService;
 import com.fatcatkill.service.NightService;
 import com.fatcatkill.service.SystemOutService;
 import com.fatcatkill.store.GameStore;
@@ -21,15 +23,17 @@ public class ActionController {
     private final NightService nightService;
     private final DayService dayService;
     private final GameStore gameStore;
+    private final GameHelperService gameHelper;
     private final SystemOutService systemOutService;
     private final BotService botService;
 
-    public ActionController(NightService nightService, DayService dayService, GameStore gameStore, BotService botService, SystemOutService systemOutService) {
+    public ActionController(NightService nightService, DayService dayService, GameStore gameStore, BotService botService, SystemOutService systemOutService, GameHelperService gameHelper) {
         this.nightService = nightService;
         this.dayService = dayService;
         this.gameStore = gameStore;
         this.botService = botService;
         this.systemOutService = systemOutService;
+        this.gameHelper = gameHelper;
     }
 
     @PostMapping("/action")
@@ -52,7 +56,13 @@ public class ActionController {
             String resultMessage = null;
 
 
-            switch (actionType) {
+            GameState currentGame = gameStore.getGame(roomId);
+            PlayerState actionPlayer = currentGame == null ? null : gameHelper.getPlayer(currentGame, playerId);
+            Role illusionRole = roleForAction(actionType);
+            if (gameHelper.isHighRabbitIllusionOf(currentGame, actionPlayer, illusionRole)) {
+                resultMessage = "Ability activated.";
+            } else {
+                switch (actionType) {
 
                 case "FATCAT_KILL":
                     resultMessage = nightService.fatcatKill(roomId, playerId, targetId);
@@ -148,15 +158,16 @@ public class ActionController {
 
                 default:
                     return ResponseEntity.badRequest().body("Unknown action type: " + actionType);
+                }
             }
 
 
             try {
                 com.fatcatkill.model.GameState game = gameStore.getGame(roomId);
                 if (game != null) {
-                    com.fatcatkill.model.PlayerState actor = game.getPlayers().stream().filter(p -> p.getUserId().equals(playerId)).findFirst().orElse(null);
-                    String username = actor == null ? null : actor.getUsername();
-                    String roleName = actor == null || actor.getRole() == null ? null : actor.getRole().name();
+                    PlayerState logPlayer = actionPlayer;
+                    String username = logPlayer == null ? null : logPlayer.getUsername();
+                    String roleName = logPlayer == null || logPlayer.getRole() == null ? null : logPlayer.getRole().name();
                     String ts = java.time.Instant.now().toString();
 
                     Long loggedTargetId = targetId != null ? targetId : targetId1;
@@ -186,6 +197,34 @@ public class ActionController {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
+    private Role roleForAction(String actionType) {
+        if (actionType == null) return null;
+        return switch (actionType) {
+            case "FATCAT_KILL", "FATCAT_TEAM_HINT" -> Role.FATCAT;
+            case "EMPEROR_REVEAL" -> Role.EMPEROR;
+            case "PH_SERVICE_ACTION" -> Role.PH_SERVICE;
+            case "STR_ACTION", "STR_SKIP" -> Role.STR;
+            case "GUOGUO_ACTION" -> Role.GUOGUO;
+            case "FORVKUSA_ACTION" -> Role.FORVKUSA;
+            case "HATONG_ACTION" -> Role.HATONG;
+            case "XIAOXIANG_ACTION" -> Role.XIAOXIANG;
+            case "MUBAIMU_ACTION" -> Role.MUBAIMU;
+            case "SHUSHU_ACTION" -> Role.SHUSHU;
+            case "GRASS_BEAN_ACTION" -> Role.GRASS_BEAN;
+            case "LIVER_ACTION" -> Role.LIVER_INDEX;
+            case "CANMAN_ACTION" -> Role.CAN_MAN;
+            case "NANGONG_ACTION" -> Role.NANGONG;
+            case "ANDY_ACTION" -> Role.ANDY;
+            case "METHANE_CHECK" -> Role.METHANE;
+            case "XIANGXIANG_ACTION" -> Role.XIANGXIANG;
+            case "AC_CAT_ACTION" -> Role.AC_CAT;
+            case "MOCHI_BOSS_CHECK" -> Role.MOCHI_BOSS;
+            case "SALTED_FISH_STAB", "SALTED_FISH_SKIP" -> Role.SALTED_FISH;
+            case "CHEN_ACTION", "CHEN_SKIP" -> Role.CHEN;
+            default -> null;
+        };
+    }
+
     @PostMapping("/bot/auto")
         public ResponseEntity<?> autoPlayBot(@RequestBody Map<String, Object> payload) {
             try {

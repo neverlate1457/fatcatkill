@@ -3,6 +3,7 @@ package com.fatcatkill;
 import com.fatcatkill.controller.CreateMockRoomController;
 import com.fatcatkill.controller.StartGameController;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.enums.Role;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,6 +45,43 @@ class RoomControllerTests {
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         objectMapper.writeValueAsString(response.getBody());
+    }
+
+    @Test
+    void hostCanStartCustomizedGameWithControlledOutcomes() {
+        controller.fillBots("host-custom", 7, Map.of(
+                "playerId", 99,
+                "hostMode", true,
+                "players", List.of(Map.of("userId", 10, "nickname", "Human"))
+        ));
+
+        List<String> deck = List.of("FATCAT", "LIVER_INDEX", "HIGH_RABBIT",
+                "METHANE", "GUOGUO", "XIANGXIANG", "AC_CAT");
+        ResponseEntity<?> response = startGameController.execute(
+                "host-custom",
+                "OLD_HOME",
+                Map.of(
+                        "hostMode", true,
+                        "customDeck", deck,
+                        "fatcatHintRoles", List.of("FORVKUSA", "HATONG"),
+                        "highRabbitRole", "METHANE"
+                )
+        );
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        GameState game = (GameState) response.getBody();
+        assertThat(game).isNotNull();
+        assertThat(game.isHostMode()).isTrue();
+        assertThat(game.getGameMode()).isEqualTo("CUSTOM");
+        assertThat(game.getPlayers()).extracting(player -> player.getRole()).containsExactlyInAnyOrder(
+                Role.FATCAT, Role.LIVER_INDEX, Role.HIGH_RABBIT, Role.METHANE,
+                Role.GUOGUO, Role.XIANGXIANG, Role.AC_CAT
+        );
+        assertThat(game.getFatcatAbsentVolunteerHintRoles()).containsExactly(Role.FORVKUSA, Role.HATONG);
+        Long rabbitId = game.getPlayers().stream().filter(player -> player.getRole() == Role.HIGH_RABBIT)
+                .findFirst().orElseThrow().getUserId();
+        assertThat(game.getHighRabbitPerceivedRoles()).containsEntry(rabbitId, Role.METHANE);
+        assertThat(game.getPlayers()).noneMatch(player -> player.getUserId().equals(99L));
     }
 
     @Test

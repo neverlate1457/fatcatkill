@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
+import java.util.HashSet;
 
 @Service
 public class RoomService {
@@ -25,6 +27,12 @@ public class RoomService {
     }
 
     public void startGame(String roomId, String gameMode) {
+        startGame(roomId, gameMode, null, null, null, null, false);
+    }
+
+    public void startGame(String roomId, String gameMode, List<Role> customDeck,
+                          List<Role> fatcatHintRoles, Role highRabbitRole,
+                          Long methaneHallucinationTargetId, boolean hostMode) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() == RoomStatus.PLAYING) {
             throw new IllegalStateException("房間不存在或遊戲已經在進行中！");
@@ -33,28 +41,34 @@ public class RoomService {
         int playerCount = gameState.getPlayers().size();
 
         // 1. 把房間人數傳給牌庫總管
-        List<Role> roleDeck = buildRoleDeck(gameMode, playerCount);
+        List<Role> roleDeck = customDeck == null
+                ? buildRoleDeck(gameMode, playerCount)
+                : validateCustomDeck(customDeck, playerCount);
         
         // 防呆：檢查牌庫數量跟房間人數對不對得上
         if (roleDeck.size() != playerCount) {
             throw new IllegalArgumentException("房間人數 (" + playerCount + ") 與選擇的模式 [" + gameMode + "] 不符！(該模式可能尚未支援此人數)");
         }
 
-        // 2. 洗牌
-        List<Role> fixedRoles = gameState.getPlayers().stream()
-                .map(PlayerState::getRole)
-                .filter(role -> role != null)
-                .toList();
-        for (Role fixedRole : fixedRoles) {
-            roleDeck.remove(fixedRole);
+        // 2. 洗牌 / 主持人自訂牌組照座位發牌
+        if (customDeck == null) {
+            List<Role> fixedRoles = gameState.getPlayers().stream()
+                    .map(PlayerState::getRole)
+                    .filter(role -> role != null)
+                    .toList();
+            for (Role fixedRole : fixedRoles) {
+                roleDeck.remove(fixedRole);
+            }
+            Collections.shuffle(roleDeck);
         }
-        Collections.shuffle(roleDeck);
 
         // 3. 發牌
         int deckIndex = 0;
         for (int i = 0; i < playerCount; i++) {
             PlayerState player = gameState.getPlayers().get(i);
-            if (player.getRole() == null) {
+            if (customDeck != null) {
+                player.setRole(roleDeck.get(i));
+            } else if (player.getRole() == null) {
                 if (deckIndex >= roleDeck.size()) {
                     throw new IllegalArgumentException("Not enough roles left after applying test role assignments.");
                 }
@@ -66,7 +80,7 @@ public class RoomService {
             player.setVoteConfirmed(false);
         }
 
-        if (requiresFatcat(gameMode) && gameState.getPlayers().stream().noneMatch(player -> player.getRole() == Role.FATCAT)) {
+        if (gameState.getPlayers().stream().noneMatch(player -> player.getRole() == Role.FATCAT)) {
             throw new IllegalArgumentException("Cannot start game: Fatcat role is missing. Please assign one player as Fatcat or clear a fixed role.");
         }
 
@@ -75,24 +89,32 @@ public class RoomService {
         // ==========================================
         boolean hasMethane = gameState.getPlayers().stream().anyMatch(p -> p.getRole() == Role.METHANE);
         if (hasMethane) {
-            // 找出場上無辜的好人 (排除肥貓、狼人、甲烷自己)
             List<PlayerState> innocentGoodGuys = gameState.getPlayers().stream()
                     .filter(p -> p.getRole() != Role.FATCAT && p.getRole() != Role.WEREWOLF && p.getRole() != Role.METHANE)
                     .toList();
 
             if (!innocentGoodGuys.isEmpty()) {
-                // 從好人名單中隨機挑選一位
-                int randomIndex = new Random().nextInt(innocentGoodGuys.size());
-                Long unluckyGuyId = innocentGoodGuys.get(randomIndex).getUserId();
-                
-                // 將倒霉鬼的 ID 存入遊戲狀態中
-                gameState.setMethaneHallucinationTargetId(unluckyGuyId);
-                systemOutService.action(gameState, null, "METHANE_HALLUCINATION_LOCKED", unluckyGuyId, null, "Methane hallucination target locked.");
+                PlayerState target = null;
+                if (methaneHallucinationTargetId != null) {
+                    target = innocentGoodGuys.stream()
+                            .filter(player -> player.getUserId().equals(methaneHallucinationTargetId))
+                            .findFirst()
+                            .orElseThrow(() -> new IllegalArgumentException("Methane hallucination target must be a non-Methane non-Fatcat player."));
+                } else {
+                    target = innocentGoodGuys.get(new Random().nextInt(innocentGoodGuys.size()));
+                }
+
+                gameState.setMethaneHallucinationTargetId(target.getUserId());
+                systemOutService.action(gameState, null, "METHANE_HALLUCINATION_LOCKED", target.getUserId(), null, "Methane hallucination target locked.");
             }
         }
         // ==========================================
 
-        gameState.setGameMode(gameMode);
+        validateHostSettings(gameState, fatcatHintRoles, highRabbitRole);
+        gameState.setHostMode(hostMode);
+        gameState.setHostConfiguredFatcatHintRoles(fatcatHintRoles == null ? null : new ArrayList<>(fatcatHintRoles));
+        gameState.setHostConfiguredHighRabbitRole(highRabbitRole);
+        gameState.setGameMode(customDeck == null ? gameMode : "CUSTOM");
         gameState.setGameId(java.util.UUID.randomUUID().toString());
         gameState.setStartedAt(java.time.LocalDateTime.now().toString());
         gameState.setHistoryRecorded(false);
@@ -113,6 +135,9 @@ public class RoomService {
         gameState.setPhServiceStolenRole(null);
         gameState.setXiaoenRedirectRound(null);
         gameState.getFatcatAbsentVolunteerHintRoles().clear();
+        if (fatcatHintRoles != null) {
+            gameState.getFatcatAbsentVolunteerHintRoles().addAll(fatcatHintRoles);
+        }
         gameState.getHighRabbitPerceivedRoles().clear();
         gameState.getNightActions().clear();
         gameState.getDelayedDeathRounds().clear();
@@ -130,7 +155,7 @@ public class RoomService {
         gameState.getNangongUsedPlayerIds().clear();
         gameState.getFinalVoteEligiblePlayerIds().clear();
         gameState.getFatcatKilledPlayerIds().clear();
-        assignHighRabbitPerceivedRoles(gameState);
+        assignHighRabbitPerceivedRoles(gameState, highRabbitRole);
 
         gameStore.saveGame(gameState);
         systemOutService.action(gameState, null, "ROOM_START_GAME", null, null, "Game started. mode=" + gameMode + " players=" + playerCount);
@@ -139,7 +164,7 @@ public class RoomService {
     /**
      * 牌庫總管：先判斷卡池(Mode)，再依照人數(Count)去呼叫對應的發牌邏輯
      */
-    private void assignHighRabbitPerceivedRoles(GameState gameState) {
+    private void assignHighRabbitPerceivedRoles(GameState gameState, Role configuredRole) {
         gameState.getHighRabbitPerceivedRoles().clear();
         Random random = new Random();
         List<PlayerState> players = gameState.getPlayers();
@@ -152,12 +177,51 @@ public class RoomService {
                             .map(PlayerState::getRole)
                             .toList();
                     if (!candidateRoles.isEmpty()) {
-                        gameState.getHighRabbitPerceivedRoles().put(
-                                highRabbit.getUserId(),
-                                candidateRoles.get(random.nextInt(candidateRoles.size()))
-                        );
+                        Role perceivedRole = configuredRole != null
+                                ? configuredRole
+                                : candidateRoles.get(random.nextInt(candidateRoles.size()));
+                        gameState.getHighRabbitPerceivedRoles().put(highRabbit.getUserId(), perceivedRole);
                     }
                 });
+    }
+
+    private List<Role> validateCustomDeck(List<Role> customDeck, int playerCount) {
+        if (customDeck.size() != playerCount || customDeck.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("Custom deck must contain exactly " + playerCount + " roles.");
+        }
+        Set<Role> uniqueRoles = new HashSet<>(customDeck);
+        if (uniqueRoles.size() != customDeck.size()) {
+            throw new IllegalArgumentException("Custom deck cannot contain duplicate roles.");
+        }
+        if (customDeck.stream().filter(role -> role == Role.FATCAT).count() != 1) {
+            throw new IllegalArgumentException("Custom deck must contain exactly one Fatcat.");
+        }
+        return new ArrayList<>(customDeck);
+    }
+
+    private void validateHostSettings(GameState gameState, List<Role> fatcatHintRoles, Role highRabbitRole) {
+        Set<Role> presentRoles = gameState.getPlayers().stream().map(PlayerState::getRole).collect(java.util.stream.Collectors.toSet());
+        if (fatcatHintRoles != null) {
+            if (fatcatHintRoles.size() > 3 || new HashSet<>(fatcatHintRoles).size() != fatcatHintRoles.size()) {
+                throw new IllegalArgumentException("Fatcat absent-role hints must contain up to three unique roles.");
+            }
+            for (Role role : fatcatHintRoles) {
+                if (!isVolunteerRole(role) || presentRoles.contains(role)) {
+                    throw new IllegalArgumentException("Fatcat hint role must be an absent volunteer role: " + role);
+                }
+            }
+        }
+        if (highRabbitRole != null && (!presentRoles.contains(Role.HIGH_RABBIT)
+                || !presentRoles.contains(highRabbitRole) || highRabbitRole == Role.HIGH_RABBIT)) {
+            throw new IllegalArgumentException("High Rabbit illusion must be another role present in the custom deck.");
+        }
+    }
+
+    private boolean isVolunteerRole(Role role) {
+        return List.of(Role.METHANE, Role.GUOGUO, Role.XIANGXIANG, Role.AC_CAT, Role.FORVKUSA,
+                Role.HATONG, Role.KB, Role.SALTED_FISH, Role.XIAOXIANG, Role.MOCHI_BOSS,
+                Role.GRASS_BEAN, Role.NANGONG, Role.CASTER, Role.ANDY, Role.CAN_MAN,
+                Role.SINGLE_DOG, Role.STR).contains(role);
     }
 
     private List<Role> buildRoleDeck(String gameMode, int playerCount) {

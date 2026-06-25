@@ -8,8 +8,14 @@ import com.fatcatkill.store.GameStore;
 import com.fatcatkill.enums.Role;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class GameHelperService {
@@ -217,6 +223,13 @@ public class GameHelperService {
         return player.getRole();
     }
 
+    public boolean isHighRabbitIllusionOf(GameState game, PlayerState player, Role expectedRole) {
+        if (game == null || player == null || player.getRole() != Role.HIGH_RABBIT || expectedRole == null) {
+            return false;
+        }
+        return game.getHighRabbitPerceivedRoles().get(player.getUserId()) == expectedRole;
+    }
+
     public java.util.List<Role> volunteerArmyRoles() {
         return java.util.List.of(
             Role.METHANE, Role.GUOGUO, Role.XIANGXIANG, Role.AC_CAT,
@@ -346,6 +359,159 @@ public class GameHelperService {
                 || (targetRole == Role.CASTER && viewerRole == Role.FATCAT);
     }
     
+    public boolean hasAliveStrActor(GameState game) {
+        return hasActorForRole(game, Role.STR);
+    }
+
+    public boolean isVoteEligible(GameState game, PlayerState player) {
+        return player != null && (player.isAlive()
+                || (game.getFinalVoteEligiblePlayerIds() != null
+                && game.getFinalVoteEligiblePlayerIds().contains(player.getUserId())));
+    }
+
+    public PlayerState validateVotingPlayer(GameState game, Long playerId) {
+        PlayerState player = getPlayer(game, playerId);
+        if (!isVoteEligible(game, player)) {
+            throw new IllegalStateException("Player is not eligible to vote.");
+        }
+        return player;
+    }
+
+    public boolean allVotingPlayersConfirmed(GameState game) {
+        return game.getPlayers().stream()
+                .filter(player -> isVoteEligible(game, player))
+                .allMatch(PlayerState::isVoteConfirmed);
+    }
+
+    public Map<Long, Integer> collectConfirmedVoteCounts(GameState game) {
+        Map<Long, Integer> voteCounts = new HashMap<>();
+        for (PlayerState player : game.getPlayers()) {
+            if (isVoteEligible(game, player)
+                    && !isDrunk(game, player.getUserId())
+                    && player.isVoteConfirmed()
+                    && player.getVotedTargetId() != null) {
+                Long targetId = player.getVotedTargetId();
+                voteCounts.put(targetId, voteCounts.getOrDefault(targetId, 0) + 1);
+            }
+        }
+        return voteCounts;
+    }
+
+    public int countAlivePlayers(GameState game) {
+        return (int) game.getPlayers().stream().filter(PlayerState::isAlive).count();
+    }
+
+    public boolean hasFatcatVotedYesterday(GameState game) {
+        return game.getPlayers().stream()
+                .filter(player -> player.getRole() == Role.FATCAT)
+                .anyMatch(player -> game.getLastDayVoterIds() != null
+                        && game.getLastDayVoterIds().contains(player.getUserId()));
+    }
+
+    public boolean isLiverDebuffed(GameState game, Long playerId) {
+        if (game == null || playerId == null || game.getNightActions() == null) return false;
+        return Objects.equals(playerId, game.getNightActions().get("LIVER_DEBUFF"));
+    }
+
+    public boolean isAbilityDisabled(GameState game, Long playerId) {
+        return isLiverDebuffed(game, playerId) || isDrunk(game, playerId);
+    }
+
+    public boolean hasOverdrinkingPenalty(GameState game, Long playerId, Long liverDebuff, Set<Long> drunkenPlayerIds) {
+        if (playerId == null) return false;
+        if (Objects.equals(playerId, liverDebuff) || drunkenPlayerIds.contains(playerId)) return true;
+        return game.getPlayers().stream()
+                .filter(player -> player.getUserId().equals(playerId))
+                .findFirst()
+                .map(player -> player.getRole() == Role.HIGH_RABBIT)
+                .orElse(false);
+    }
+
+    public boolean markBarkKingNoShowIfNeeded(GameState game, PlayerState target) {
+        if (target == null || target.getRole() != Role.BARK_KING) return false;
+        game.getBarkKingDoomRounds().merge(
+                target.getUserId(),
+                game.getCurrentRound() + 1,
+                Math::min
+        );
+        return true;
+    }
+
+    public boolean isFatcatForMethane(GameState game, Long checkerId, PlayerState target) {
+        PlayerState checker = getPlayer(game, checkerId);
+        Long hallucinationTargetId = game.getMethaneHallucinationTargetId();
+        return isDisplayedFatcatFaction(game, checker.getRole(), target)
+                || (hallucinationTargetId != null && target.getUserId().equals(hallucinationTargetId));
+    }
+
+    public int countAdjacentFatcatSeatPairs(GameState game) {
+        List<Integer> fatcatSeats = game.getPlayers().stream()
+                .filter(PlayerState::isAlive)
+                .filter(player -> getEffectiveSeatNumber(game, player) != null)
+                .filter(player -> isFatcatFaction(player.getRole()))
+                .map(player -> getEffectiveSeatNumber(game, player))
+                .sorted()
+                .toList();
+
+        int pairs = 0;
+        for (int i = 1; i < fatcatSeats.size(); i++) {
+            if (fatcatSeats.get(i) - fatcatSeats.get(i - 1) == 1) {
+                pairs++;
+            }
+        }
+        return pairs;
+    }
+
+    public int countAdjacentFatcats(GameState game, int seatNumber) {
+        Map<Integer, PlayerState> seatMap = new HashMap<>();
+        for (PlayerState player : game.getPlayers()) {
+            Integer effectiveSeat = getEffectiveSeatNumber(game, player);
+            if (player.isAlive() && effectiveSeat != null) {
+                seatMap.put(effectiveSeat, player);
+            }
+        }
+
+        if (seatMap.isEmpty()) return 0;
+
+        List<Integer> seats = new ArrayList<>(seatMap.keySet());
+        Collections.sort(seats);
+
+        PlayerState left = findNextAliveInDirection(seats, seatMap, seatNumber, -1);
+        PlayerState right = findNextAliveInDirection(seats, seatMap, seatNumber, 1);
+
+        int count = 0;
+        if (left != null && isFatcatFaction(left.getRole())) count++;
+        if (right != null && isFatcatFaction(right.getRole())) count++;
+        return count;
+    }
+
+    private PlayerState findNextAliveInDirection(List<Integer> sortedSeats, Map<Integer, PlayerState> seatMap, int fromSeat, int direction) {
+        if (sortedSeats.isEmpty()) return null;
+
+        int idx = -1;
+        for (int i = 0; i < sortedSeats.size(); i++) {
+            if (sortedSeats.get(i) == fromSeat) {
+                idx = i;
+                break;
+            }
+            if (sortedSeats.get(i) > fromSeat) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx == -1) idx = 0;
+
+        int start = idx;
+        int i = start;
+        int n = sortedSeats.size();
+        while (true) {
+            i = (i + direction + n) % n;
+            if (i == start) break;
+            PlayerState player = seatMap.get(sortedSeats.get(i));
+            if (player != null) return player;
+        }
+        return null;
+    }
     /**
      * 取得場上任意玩家（不檢查是否存活）
      */

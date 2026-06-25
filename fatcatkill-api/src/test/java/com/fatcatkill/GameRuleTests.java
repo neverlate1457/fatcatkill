@@ -57,6 +57,19 @@ class GameRuleTests {
     }
 
     @Test
+    void highRabbitIllusionNeverGrantsAbilityAccess() {
+        GameState game = game("high-rabbit", GamePhase.METHANE_ACTION,
+                player(1, Role.HIGH_RABBIT),
+                player(2, Role.FATCAT));
+        game.getHighRabbitPerceivedRoles().put(1L, Role.METHANE);
+
+        assertThat(gameHelper.effectiveRole(game, gameHelper.getPlayer(game, 1L))).isEqualTo(Role.HIGH_RABBIT);
+        assertThat(gameHelper.canActAs(game, gameHelper.getPlayer(game, 1L), Role.METHANE)).isFalse();
+        assertThat(gameHelper.isHighRabbitIllusionOf(game, gameHelper.getPlayer(game, 1L), Role.METHANE)).isTrue();
+        assertThat(gameHelper.hasActorForRole(game, Role.METHANE)).isFalse();
+    }
+
+    @Test
     void pinkRabbitDiesInsteadOfFatcatWhenSaltedFishStabs() {
         GameState game = game("pink", GamePhase.VOTING,
                 player(1, Role.SALTED_FISH),

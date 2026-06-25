@@ -10,6 +10,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 @RestController
 @CrossOrigin(origins = "*")
@@ -36,13 +38,41 @@ public class StartGameController {
             @RequestBody(required = false) Map<String, Object> payload) {
         try {
             applyTestRoleAssignments(roomId, payload);
-            roomService.startGame(roomId, mode);
+            boolean hostMode = payload != null && Boolean.TRUE.equals(payload.get("hostMode"));
+            List<Role> customDeck = hostMode ? parseRoleList(payload.get("customDeck")) : null;
+            List<Role> fatcatHints = hostMode ? parseRoleList(payload.get("fatcatHintRoles")) : null;
+            Role highRabbitRole = hostMode ? parseRole(payload.get("highRabbitRole")) : null;
+            Long methaneTargetId = hostMode ? parseLong(payload.get("methaneHallucinationTargetId")) : null;
+            roomService.startGame(roomId, mode, customDeck, fatcatHints, highRabbitRole, methaneTargetId, hostMode);
             var game = gameStore.getGame(roomId);
             gameLogService.append(game, null, "START_GAME", null, null, "Game started with mode " + mode + ".");
             return ResponseEntity.ok(gameStore.getGame(roomId));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
+    }
+
+    private List<Role> parseRoleList(Object rawRoles) {
+        if (rawRoles == null) return null;
+        if (!(rawRoles instanceof List<?> values)) {
+            throw new IllegalArgumentException("Role setting must be a list.");
+        }
+        List<Role> roles = new ArrayList<>();
+        for (Object value : values) {
+            Role role = parseRole(value);
+            if (role != null) roles.add(role);
+        }
+        return roles;
+    }
+
+    private Role parseRole(Object value) {
+        if (value == null || value.toString().isBlank()) return null;
+        return Role.valueOf(value.toString());
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null || value.toString().isBlank()) return null;
+        return Long.valueOf(value.toString());
     }
 
     private void applyTestRoleAssignments(String roomId, Map<String, Object> payload) {

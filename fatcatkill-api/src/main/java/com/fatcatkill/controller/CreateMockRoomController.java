@@ -66,6 +66,11 @@ public class CreateMockRoomController {
 
         List<PlayerState> players = new ArrayList<>();
         Set<Long> usedIds = new HashSet<>();
+        if (payload != null && Boolean.TRUE.equals(payload.get("hostMode"))
+                && payload.get("playerId") instanceof Number hostId) {
+            usedIds.add(hostId.longValue());
+            gameState.setHostMode(true);
+        }
 
         Object rawPlayers = payload == null ? null : payload.get("players");
         if (rawPlayers instanceof List<?> humanPlayers) {

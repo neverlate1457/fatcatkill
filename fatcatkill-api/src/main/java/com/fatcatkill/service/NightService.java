@@ -277,7 +277,7 @@ public class NightService {
 
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.EMPEROR);
         gameState.getPlayers().forEach(player -> gameHelper.rememberRatManChecker(gameState, playerId, player));
-        return isAbilityDisabled(gameState, playerId)
+        return gameHelper.isAbilityDisabled(gameState, playerId)
                 ? buildScrambledAllRolesHint(gameState)
                 : buildAllRolesHint(gameState);
     }
@@ -301,7 +301,7 @@ public class NightService {
     public void canManAction(String roomId, Long playerId, Long targetId) {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.CAN_MAN_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.CAN_MAN);
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return;
@@ -316,7 +316,7 @@ public class NightService {
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
 
         gameState.getNightActions().put("CAN_MAN_ID", playerId);
-        if (!markBarkKingNoShowIfNeeded(gameState, target)) {
+        if (!gameHelper.markBarkKingNoShowIfNeeded(gameState, target)) {
             gameState.getNightActions().put("CAN_MAN_DRINK", targetId);
         }
         moveToNextPhase(gameState);
@@ -330,7 +330,7 @@ public class NightService {
             throw new IllegalStateException("Nangong has already used this action.");
         }
         gameState.getNangongUsedPlayerIds().add(playerId);
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return;
@@ -338,7 +338,7 @@ public class NightService {
         targetId = redirectToXiaoenIfNeeded(gameState, playerId, targetId);
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
 
-        if (markBarkKingNoShowIfNeeded(gameState, target)) {
+        if (gameHelper.markBarkKingNoShowIfNeeded(gameState, target)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return;
@@ -358,13 +358,12 @@ public class NightService {
         target2 = redirectToXiaoenIfNeeded(gameState, playerId, target2);
         PlayerState first = gameHelper.getAlivePlayer(gameState, target1);
         PlayerState second = gameHelper.getAlivePlayer(gameState, target2);
-        Long hallucinationTargetId = gameState.getMethaneHallucinationTargetId();
 
         gameHelper.rememberRatManChecker(gameState, playerId, first);
         gameHelper.rememberRatManChecker(gameState, playerId, second);
-        boolean hasFatcat = isFatcatForMethane(gameState, playerId, first, hallucinationTargetId)
-                || isFatcatForMethane(gameState, playerId, second, hallucinationTargetId);
-        boolean debuffed = isAbilityDisabled(gameState, playerId);
+        boolean hasFatcat = gameHelper.isFatcatForMethane(gameState, playerId, first)
+                || gameHelper.isFatcatForMethane(gameState, playerId, second);
+        boolean debuffed = gameHelper.isAbilityDisabled(gameState, playerId);
 
         moveToNextPhase(gameState);
         gameStore.saveGame(gameState);
@@ -379,7 +378,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.GUOGUO_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.GUOGUO);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "Guoguo hint: no valid hint was found.";
@@ -399,7 +398,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.FORVKUSA_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.FORVKUSA);
 
-        int adjacentPairs = isAbilityDisabled(gameState, playerId) ? 0 : countAdjacentFatcatSeatPairs(gameState);
+        int adjacentPairs = gameHelper.isAbilityDisabled(gameState, playerId) ? 0 : gameHelper.countAdjacentFatcatSeatPairs(gameState);
         moveToNextPhase(gameState);
         gameStore.saveGame(gameState);
         return "Forvkusa check: Fatcat-side adjacent seat pairs = " + adjacentPairs + ".";
@@ -412,10 +411,7 @@ public class NightService {
             throw new IllegalStateException("Hatong must have voted on the previous day.");
         }
 
-        boolean fatcatVoted = !isAbilityDisabled(gameState, playerId) && gameState.getPlayers().stream()
-                .filter(player -> player.getRole() == Role.FATCAT)
-                .anyMatch(player -> gameState.getLastDayVoterIds() != null
-                        && gameState.getLastDayVoterIds().contains(player.getUserId()));
+        boolean fatcatVoted = !gameHelper.isAbilityDisabled(gameState, playerId) && gameHelper.hasFatcatVotedYesterday(gameState);
 
         moveToNextPhase(gameState);
         gameStore.saveGame(gameState);
@@ -427,7 +423,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.XIAOXIANG_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.XIAOXIANG);
 
-        long allianceCount = isAbilityDisabled(gameState, playerId) ? 0 : gameHelper.countAntiFatcatAlliance(gameState);
+        long allianceCount = gameHelper.isAbilityDisabled(gameState, playerId) ? 0 : gameHelper.countAntiFatcatAlliance(gameState);
 
         moveToNextPhase(gameState);
         gameStore.saveGame(gameState);
@@ -438,7 +434,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.MUBAIMU_ACTION);
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.MUBAIMU);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "Mubaimu action: tart shared safely.";
@@ -459,7 +455,7 @@ public class NightService {
             if (target.getUserId().equals(playerId)) {
                 throw new IllegalArgumentException("Mubaimu cannot give a tart to self.");
             }
-            if (markBarkKingNoShowIfNeeded(gameState, target)) {
+            if (gameHelper.markBarkKingNoShowIfNeeded(gameState, target)) {
                 continue;
             }
             if (gameHelper.isFatcatFaction(target.getRole())) {
@@ -482,7 +478,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.SHUSHU_ACTION);
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.SHUSHU);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "Shushu travel: the companions appeared to be from different factions.";
@@ -503,8 +499,8 @@ public class NightService {
         PlayerState first = gameHelper.getAlivePlayer(gameState, targetId1);
         PlayerState second = gameHelper.getAlivePlayer(gameState, targetId2);
 
-        boolean firstNoShow = markBarkKingNoShowIfNeeded(gameState, first);
-        boolean secondNoShow = markBarkKingNoShowIfNeeded(gameState, second);
+        boolean firstNoShow = gameHelper.markBarkKingNoShowIfNeeded(gameState, first);
+        boolean secondNoShow = gameHelper.markBarkKingNoShowIfNeeded(gameState, second);
         boolean sameDisplayedFaction = false;
         if (!firstNoShow && !secondNoShow) {
             gameHelper.rememberRatManChecker(gameState, playerId, first);
@@ -540,7 +536,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.GRASS_BEAN_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.GRASS_BEAN);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "Grass Bean check: no alive Fatcat horcrux was found.";
@@ -571,7 +567,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.ANDY_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.ANDY);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "Andy check: no alive volunteer-army player was found.";
@@ -611,7 +607,7 @@ public class NightService {
         if (actorSeat == null) {
             throw new IllegalStateException("Xiangxiang must have a seat number.");
         }
-        int count = isAbilityDisabled(gameState, playerId) ? 0 : countAdjacentFatcats(gameState, actorSeat);
+        int count = gameHelper.isAbilityDisabled(gameState, playerId) ? 0 : gameHelper.countAdjacentFatcats(gameState, actorSeat);
         moveToNextPhase(gameState);
         gameStore.saveGame(gameState);
         return "Xiangxiang check: found " + count + " adjacent Fatcat-side players.";
@@ -621,7 +617,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.AC_CAT_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.AC_CAT);
 
-        if (isAbilityDisabled(gameState, playerId)) {
+        if (gameHelper.isAbilityDisabled(gameState, playerId)) {
             moveToNextPhase(gameState);
             gameStore.saveGame(gameState);
             return "AC Cat check: no player was exiled yesterday.";
@@ -657,17 +653,12 @@ public class NightService {
         gameState.setCurrentPhase(GamePhase.DAY_START);
         gameStore.saveGame(gameState);
 
-        return !isAbilityDisabled(gameState, playerId)
+        return !gameHelper.isAbilityDisabled(gameState, playerId)
                 && gameHelper.isDisplayedFatcatFaction(gameState, Role.MOCHI_BOSS, target)
                 ? "Mochi Boss check: selected player is Fatcat."
                 : "Mochi Boss check: selected player is not Fatcat.";
     }
 
-    private boolean isFatcatForMethane(GameState gameState, Long checkerId, PlayerState player, Long hallucinationTargetId) {
-        PlayerState checker = gameHelper.getPlayer(gameState, checkerId);
-        return gameHelper.isDisplayedFatcatFaction(gameState, checker.getRole(), player)
-                || (hallucinationTargetId != null && player.getUserId().equals(hallucinationTargetId));
-    }
 
     private Long redirectToXiaoenIfNeeded(GameState gameState, Long actorId, Long targetId) {
         if (targetId == null) return null;
@@ -806,74 +797,8 @@ public class NightService {
                 + ", one role is " + translateRole(roleSource.getRole()) + ".";
     }
 
-    private int countAdjacentFatcatSeatPairs(GameState gameState) {
-        List<Integer> fatcatSeats = gameState.getPlayers().stream()
-                .filter(PlayerState::isAlive)
-                .filter(player -> gameHelper.getEffectiveSeatNumber(gameState, player) != null)
-                .filter(player -> gameHelper.isFatcatFaction(player.getRole()))
-                .map(player -> gameHelper.getEffectiveSeatNumber(gameState, player))
-                .sorted()
-                .toList();
 
-        int pairs = 0;
-        for (int i = 1; i < fatcatSeats.size(); i++) {
-            if (fatcatSeats.get(i) - fatcatSeats.get(i - 1) == 1) {
-                pairs++;
-            }
-        }
-        return pairs;
-    }
 
-    private int countAdjacentFatcats(GameState gameState, int seatNumber) {
-        Map<Integer, PlayerState> seatMap = new HashMap<>();
-        for (PlayerState player : gameState.getPlayers()) {
-            Integer effectiveSeat = gameHelper.getEffectiveSeatNumber(gameState, player);
-            if (player.isAlive() && effectiveSeat != null) {
-                seatMap.put(effectiveSeat, player);
-            }
-        }
-
-        if (seatMap.isEmpty()) return 0;
-
-        List<Integer> seats = new ArrayList<>(seatMap.keySet());
-        Collections.sort(seats);
-
-        PlayerState left = findNextAliveInDirection(seats, seatMap, seatNumber, -1);
-        PlayerState right = findNextAliveInDirection(seats, seatMap, seatNumber, 1);
-
-        int count = 0;
-        if (left != null && gameHelper.isFatcatFaction(left.getRole())) count++;
-        if (right != null && gameHelper.isFatcatFaction(right.getRole())) count++;
-        return count;
-    }
-
-    private PlayerState findNextAliveInDirection(List<Integer> sortedSeats, Map<Integer, PlayerState> seatMap, int fromSeat, int direction) {
-        if (sortedSeats.isEmpty()) return null;
-
-        int idx = -1;
-        for (int i = 0; i < sortedSeats.size(); i++) {
-            if (sortedSeats.get(i) == fromSeat) {
-                idx = i;
-                break;
-            }
-            if (sortedSeats.get(i) > fromSeat) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx == -1) idx = 0;
-
-        int start = idx;
-        int i = start;
-        int n = sortedSeats.size();
-        while (true) {
-            i = (i + direction + n) % n;
-            if (i == start) break;
-            PlayerState player = seatMap.get(sortedSeats.get(i));
-            if (player != null) return player;
-        }
-        return null;
-    }
 
     private void settleNightActions(GameState gameState) {
         Long fatcatKill = gameState.getNightActions().get("FATCAT_KILL");
@@ -934,8 +859,8 @@ public class NightService {
 
         if (canManId != null && canManDrink != null) {
             boolean canManDrinkingDied = false;
-            if (hasOverdrinkingPenalty(gameState, canManId, liverDebuff, drunkenPlayerIds)
-                    || hasOverdrinkingPenalty(gameState, canManDrink, liverDebuff, drunkenPlayerIds)) {
+            if (gameHelper.hasOverdrinkingPenalty(gameState, canManId, liverDebuff, drunkenPlayerIds)
+                    || gameHelper.hasOverdrinkingPenalty(gameState, canManDrink, liverDebuff, drunkenPlayerIds)) {
                 gameHelper.setDead(gameState, canManId);
                 gameHelper.setDead(gameState, canManDrink);
                 canManDrinkingDied = true;
@@ -961,34 +886,9 @@ public class NightService {
         gameState.getNightActions().clear();
     }
 
-    private boolean isLiverDebuffed(GameState gameState, Long playerId) {
-        Long liverDebuff = gameState.getNightActions().get("LIVER_DEBUFF");
-        return playerId != null && playerId.equals(liverDebuff);
-    }
 
-    private boolean isAbilityDisabled(GameState gameState, Long playerId) {
-        return isLiverDebuffed(gameState, playerId) || gameHelper.isDrunk(gameState, playerId);
-    }
 
-    private boolean hasOverdrinkingPenalty(GameState gameState, Long playerId, Long liverDebuff, Set<Long> drunkenPlayerIds) {
-        if (playerId == null) return false;
-        if (Objects.equals(playerId, liverDebuff) || drunkenPlayerIds.contains(playerId)) return true;
-        return gameState.getPlayers().stream()
-                .filter(player -> player.getUserId().equals(playerId))
-                .findFirst()
-                .map(player -> player.getRole() == Role.HIGH_RABBIT)
-                .orElse(false);
-    }
 
-    private boolean markBarkKingNoShowIfNeeded(GameState gameState, PlayerState target) {
-        if (target == null || target.getRole() != Role.BARK_KING) return false;
-        gameState.getBarkKingDoomRounds().merge(
-                target.getUserId(),
-                gameState.getCurrentRound() + 1,
-                Math::min
-        );
-        return true;
-    }
 
     private void settleChenAction(GameState gameState) {
         Long victimId = gameState.getChenPendingKillPlayerId();

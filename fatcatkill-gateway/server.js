@@ -114,17 +114,21 @@ const fetchRoomState = async (roomId) => {
   return response.data;
 };
 
-const sanitizeGameState = (gameState, viewerId) => {
+const sanitizeGameState = (gameState, viewerId, spectator = false) => {
   if (!gameState || typeof gameState !== 'object') return gameState;
 
   const sanitized = JSON.parse(JSON.stringify(gameState));
+  if (spectator) return sanitized;
   const normalizedViewerId = viewerId == null ? null : String(viewerId);
 const viewer = sanitized.players?.find((player) => String(player.userId) === normalizedViewerId);
   const actualPhase = sanitized.currentPhase;
   if (!PUBLIC_PHASES.has(actualPhase)) {
-    const effectiveViewerRole = viewer?.role === 'PH_SERVICE' && sanitized.phServiceStolenRole
-      ? sanitized.phServiceStolenRole
-      : viewer?.role;
+    const perceivedRole = sanitized.highRabbitPerceivedRoles?.[normalizedViewerId];
+    const effectiveViewerRole = viewer?.role === 'HIGH_RABBIT' && perceivedRole
+      ? perceivedRole
+      : viewer?.role === 'PH_SERVICE' && sanitized.phServiceStolenRole
+        ? sanitized.phServiceStolenRole
+        : viewer?.role;
     const requiredRole = PHASE_ACTOR_ROLES[actualPhase];
     const isFatcatTurn = actualPhase === 'NIGHT_START'
       && (sanitized.fatcatKillerPlayerId != null
@@ -174,6 +178,8 @@ sanitized.barkKingDoomRounds = {};
     : {};
   sanitized.phServiceStolenRole = viewer?.role === 'PH_SERVICE' ? sanitized.phServiceStolenRole : null;
   sanitized.ratManCheckerIds = viewer?.role === 'RAT_MAN' ? sanitized.ratManCheckerIds : [];
+  sanitized.hostConfiguredFatcatHintRoles = null;
+  sanitized.hostConfiguredHighRabbitRole = null;
   sanitized.fatcatKillerPlayerId = String(sanitized.fatcatKillerPlayerId) === normalizedViewerId
     ? sanitized.fatcatKillerPlayerId
     : null;
@@ -194,21 +200,33 @@ const broadcastRoomState = async (roomId, fallbackData = null) => {
 
   const roomSockets = await io.in(roomId).fetchSockets();
   for (const roomSocket of roomSockets) {
-    roomSocket.emit('gameStateUpdate', sanitizeGameState(gameState, roomSocket.data.userId));
+    roomSocket.emit('gameStateUpdate', sanitizeGameState(gameState, roomSocket.data.userId, roomSocket.data.isSpectator));
   }
   return gameState;
 };
 
 const getRoomList = () => Array.from(roomParticipants.entries())
-  .map(([roomId, participants]) => ({
-    roomId,
-    hostId: roomHosts.get(roomId) ?? null,
-    capacity: Array.from(participants.values()).find((player) => player.userId === roomHosts.get(roomId))?.roomSize || 7,
-    playerCount: participants.size,
-    players: Array.from(participants.values())
-  }))
-  .filter((room) => room.playerCount > 0)
+  .map(([roomId, participants]) => {
+    const connected = Array.from(participants.values());
+    const players = connected.filter((participant) => !participant.isSpectator);
+    return {
+      roomId,
+      hostId: roomHosts.get(roomId) ?? null,
+      capacity: connected.find((participant) => participant.userId === roomHosts.get(roomId))?.roomSize || 7,
+      playerCount: players.length,
+      players,
+      spectators: connected.filter((participant) => participant.isSpectator)
+    };
+  })
+  .filter((room) => room.playerCount > 0 || room.spectators.length > 0)
   .sort((a, b) => a.roomId.localeCompare(b.roomId));
+
+const connectedPlayersForRoom = (participants) => Array.from(participants?.values?.() || [])
+  .filter((participant) => !participant.isSpectator && participant.userId != null)
+  .map((participant) => ({
+    userId: Number(participant.userId),
+    nickname: participant.nickname || `Player ${participant.userId}`
+  }));
 
 const broadcastRoomList = () => {
   io.emit('roomListUpdate', getRoomList());
@@ -275,6 +293,7 @@ io.on('connection', (socket) => {
     const nickname = typeof payload === 'string'
       ? null
       : (payload.nickname || `Player ${userId || socket.id.slice(0, 5)}`);
+    const wantsSpectator = typeof payload !== 'string' && payload.spectator === true;
 
     if (!roomId) return rejectJoin('Missing roomId.');
     if (!Number.isSafeInteger(userId) || userId <= 0) {
@@ -282,6 +301,9 @@ io.on('connection', (socket) => {
     }
     if (!/^[A-Za-z0-9-]{16,100}$/.test(clientId)) {
       return rejectJoin('A valid client identity is required.');
+    }
+    if (wantsSpectator && roomHosts.has(roomId) && roomHosts.get(roomId) !== userId) {
+      return rejectJoin('Only the room host can join as spectator.');
     }
 
     if (!roomIdentityClaims.has(roomId)) {
@@ -302,7 +324,8 @@ io.on('connection', (socket) => {
 
     if (socket.data.roomId === roomId
         && socket.data.userId === userId
-        && socket.data.clientId === clientId) {
+        && socket.data.clientId === clientId
+        && socket.data.isSpectator === wantsSpectator) {
       if (typeof ack === 'function') ack({ ok: true, roomId, userId, hostId: roomHosts.get(roomId) ?? userId });
       return;
     }
@@ -316,6 +339,7 @@ io.on('connection', (socket) => {
     socket.data.userId = userId;
     socket.data.clientId = clientId;
     socket.data.nickname = nickname;
+    socket.data.isSpectator = wantsSpectator;
 
     if (!roomParticipants.has(roomId)) roomParticipants.set(roomId, new Map());
     if (!roomHosts.has(roomId)) roomHosts.set(roomId, userId);
@@ -324,7 +348,8 @@ io.on('connection', (socket) => {
       clientId,
       userId,
       nickname,
-      roomSize
+      roomSize,
+      isSpectator: wantsSpectator
     });
     broadcastRoomList();
 
@@ -334,7 +359,7 @@ io.on('connection', (socket) => {
 
     try {
       const gameState = await fetchRoomState(roomId);
-      socket.emit('gameStateUpdate', sanitizeGameState(gameState, userId));
+      socket.emit('gameStateUpdate', sanitizeGameState(gameState, userId, wantsSpectator));
     } catch (error) {
       if (error.response?.status !== 404) {
         socket.emit('actionError', error.response?.data || 'Failed to load room.');
@@ -358,14 +383,25 @@ io.on('connection', (socket) => {
       if (!allowedRoute(httpMethod, endpointUrl.pathname, socket.data.roomId)) {
         throw new Error('Action route is not allowed.');
       }
-      if (hostOnlyRoute(httpMethod, endpointUrl.pathname)
-          && roomHosts.get(socket.data.roomId) !== socket.data.userId) {
+      const isHostRoute = hostOnlyRoute(httpMethod, endpointUrl.pathname);
+      if (isHostRoute && roomHosts.get(socket.data.roomId) !== socket.data.userId) {
         throw new Error('Only the room host can perform this action.');
+      }
+      if (socket.data.isSpectator && !isHostRoute
+          && !(httpMethod === 'GET' && endpointUrl.pathname === `/room/${socket.data.roomId}`)) {
+        throw new Error('Spectators cannot perform player actions.');
       }
 
       const path = `${endpointUrl.pathname}${endpointUrl.search}`;
       const url = `${SPRING_BOOT_URL}${path}`;
-      const data = bindActorIdentity(payload.data || {}, socket);
+      let data = bindActorIdentity(payload.data || {}, socket);
+      if (/^\/room\/fill-bots\//.test(endpointUrl.pathname)) {
+        data = {
+          ...data,
+          hostMode: Boolean(socket.data.isSpectator),
+          players: connectedPlayersForRoom(roomParticipants.get(socket.data.roomId))
+        };
+      }
       const response = httpMethod === 'GET'
         ? await axios.get(url, { params: data })
         : httpMethod === 'DELETE'
@@ -388,7 +424,7 @@ io.on('connection', (socket) => {
       const result = {
         ok: true,
         message: response.data?.message || null,
-        gameState: sanitizeGameState(updatedGameState, socket.data.userId)
+        gameState: sanitizeGameState(updatedGameState, socket.data.userId, socket.data.isSpectator)
       };
       if (response.data?.message) socket.emit('actionResult', result);
       if (typeof ack === 'function') ack(result);
@@ -431,6 +467,7 @@ module.exports = {
   allowedRoute,
   bindActorIdentity,
   hostOnlyRoute,
+  connectedPlayersForRoom,
   sanitizeGameState,
   validateIdentityClaim
 };

@@ -5,6 +5,7 @@ import { roleTranslations, translateRole } from './roleTranslations'
 
 const STORAGE_KEY = 'fatcatkill.session'
 const CLIENT_ID_KEY = 'fatcatkill.clientId'
+const HOST_DECKS_KEY = 'fatcatkill.hostDecks'
 const clientId = (() => {
   const saved = window.localStorage.getItem(CLIENT_ID_KEY)
   if (saved) return saved
@@ -39,6 +40,16 @@ const mubaimuSelection = ref([])
 const shushuSelection = ref([])
 const selectedMode = ref('OLD_HOME')
 const roomSize = ref(savedSession.roomSize || 7)
+const hostMode = ref(Boolean(savedSession.hostMode))
+const defaultHostDeck = (size) => ['FATCAT', 'LIVER_INDEX', 'HIGH_RABBIT', 'METHANE', 'GUOGUO', 'XIANGXIANG', 'AC_CAT', 'FORVKUSA', 'HATONG', 'CAN_MAN'].slice(0, Number(size) || 7)
+const customDeck = ref(Array.isArray(savedSession.customDeck) && savedSession.customDeck.length === Number(roomSize.value) ? [...savedSession.customDeck] : defaultHostDeck(roomSize.value))
+const fatcatHintRoles = ref(Array.isArray(savedSession.fatcatHintRoles) ? [...savedSession.fatcatHintRoles] : [])
+const highRabbitRole = ref(savedSession.highRabbitRole || '')
+const hostMethaneHallucinationTargetId = ref(savedSession.hostMethaneHallucinationTargetId || '')
+const hostAdvancedOpen = ref(Boolean(savedSession.hostAdvancedOpen))
+const deckName = ref('')
+const savedDecks = ref((() => { try { return JSON.parse(window.localStorage.getItem(HOST_DECKS_KEY) || '[]') } catch { return [] } })())
+const selectedSavedDeck = ref('')
 const phServiceTargetRole = ref('METHANE')
 const testRoleAssignments = ref({})
 
@@ -99,6 +110,8 @@ const modeLabels = {
 }
 
 const testRoleOptions = computed(() => Object.keys(roleTranslations).sort((a, b) => roleName(a).localeCompare(roleName(b), 'zh-Hant')))
+
+const customRoleOptions = Object.keys(roleTranslations).filter((role) => !['WEREWOLF', 'VILLAGER', 'SEER', 'WITCH', 'HUNTER', 'GUARD'].includes(role))
 
 const volunteerRoleOptions = [
   'METHANE',
@@ -179,7 +192,13 @@ const saveSession = () => {
     userId: userId.value,
     nickname: nickname.value,
     selectedMode: selectedMode.value,
-    roomSize: Number(roomSize.value) || 7
+    roomSize: Number(roomSize.value) || 7,
+    hostMode: hostMode.value,
+    customDeck: customDeck.value,
+    fatcatHintRoles: fatcatHintRoles.value,
+    highRabbitRole: highRabbitRole.value,
+    hostMethaneHallucinationTargetId: hostMethaneHallucinationTargetId.value,
+    hostAdvancedOpen: hostAdvancedOpen.value
   }))
 }
 
@@ -188,12 +207,19 @@ const clearSavedRoom = () => {
     userId: userId.value,
     nickname: nickname.value,
     selectedMode: selectedMode.value,
-    roomSize: Number(roomSize.value) || 7
+    roomSize: Number(roomSize.value) || 7,
+    hostMode: hostMode.value,
+    customDeck: customDeck.value,
+    fatcatHintRoles: fatcatHintRoles.value,
+    highRabbitRole: highRabbitRole.value,
+    hostMethaneHallucinationTargetId: hostMethaneHallucinationTargetId.value,
+    hostAdvancedOpen: hostAdvancedOpen.value
   }
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
 }
 
-watch([roomId, userId, nickname, selectedMode, roomSize], saveSession)
+watch([roomId, userId, nickname, selectedMode, roomSize, hostMode, customDeck, fatcatHintRoles, highRabbitRole, hostMethaneHallucinationTargetId, hostAdvancedOpen], saveSession, { deep: true })
+watch(roomSize, (size) => { if (hostMode.value && customDeck.value.length !== Number(size)) { customDeck.value = defaultHostDeck(size); fatcatHintRoles.value = []; highRabbitRole.value = ''; hostMethaneHallucinationTargetId.value = '' } })
 
 const errorMessage = (error, fallback = 'Action failed.') => {
   const data = error?.response?.data
@@ -224,7 +250,8 @@ const joinSocketRoom = async ({ force = false } = {}) => {
       userId: Number(userId.value),
       clientId,
       nickname: displayName.value,
-      roomSize: Number(roomSize.value)
+      roomSize: Number(roomSize.value),
+      spectator: hostMode.value
     }, (response) => {
       window.clearTimeout(timer)
       if (!response?.ok) {
@@ -255,7 +282,14 @@ const openRoomList = async () => {
   await requestRoomList()
 }
 
+const createHostedRoom = async () => {
+  hostMode.value = true
+  if (!roomId.value) roomId.value = String(Math.floor(1000 + Math.random() * 9000))
+  await joinRoom()
+}
+
 const createRoom = async () => {
+  hostMode.value = false
   if (!userId.value) {
     alert('Please enter player ID.')
     return
@@ -267,6 +301,7 @@ const createRoom = async () => {
 }
 
 const selectRoom = async (selectedRoomId) => {
+  hostMode.value = false
   const selectedRoom = connectedRooms.value.find((room) => room.roomId === selectedRoomId)
   if (selectedRoom?.capacity) roomSize.value = selectedRoom.capacity
   roomId.value = selectedRoomId
@@ -340,6 +375,10 @@ const myPlayer = computed(() => {
 
 const myEffectiveRole = computed(() => {
   if (!gameState.value || !myPlayer.value) return null
+  if (myPlayer.value.role === 'HIGH_RABBIT') {
+    const perceivedRoles = gameState.value.highRabbitPerceivedRoles || {}
+    return perceivedRoles[myPlayer.value.userId] || perceivedRoles[String(myPlayer.value.userId)] || null
+  }
   if (myPlayer.value.role === 'PH_SERVICE' && gameState.value.phServiceStolenRole) {
     return gameState.value.phServiceStolenRole
   }
@@ -383,7 +422,7 @@ const onlineRoomPlayers = computed(() => {
   }
 
   const currentUserId = Number(userId.value)
-  if (Number.isFinite(currentUserId) && !playersByKey.has(String(currentUserId))) {
+  if (!hostMode.value && Number.isFinite(currentUserId) && !playersByKey.has(String(currentUserId))) {
     playersByKey.set(String(currentUserId), {
       userId: currentUserId,
       username: displayName.value
@@ -396,11 +435,37 @@ const onlineRoomPlayers = computed(() => {
 const currentRoomInfo = computed(() => connectedRooms.value.find((room) => room.roomId === roomId.value) || null)
 const roomHostId = computed(() => currentRoomInfo.value?.hostId ?? gameState.value?.hostId ?? null)
 const isRoomHost = computed(() => roomHostId.value != null && Number(roomHostId.value) === Number(userId.value))
+const isHostSpectator = computed(() => hostMode.value && isRoomHost.value)
+const hostDeckHasHighRabbit = computed(() => customDeck.value.includes('HIGH_RABBIT'))
+const hostDeckHasMethane = computed(() => customDeck.value.includes('METHANE'))
+const availableFatcatHintRoles = computed(() => volunteerRoleOptions.filter((role) => !customDeck.value.includes(role)))
+const highRabbitRoleOptions = computed(() => [...new Set(customDeck.value.filter((role) => role && role !== 'HIGH_RABBIT'))])
+const hostAdvancedSummary = computed(() => {
+  const summary = []
+  summary.push(fatcatHintRoles.value.length ? '肥貓情報 ' + fatcatHintRoles.value.length + '/3' : '肥貓情報隨機')
+  summary.push(hostDeckHasHighRabbit.value && highRabbitRole.value ? '高能兔: ' + roleName(highRabbitRole.value) : '高能兔隨機')
+  summary.push(hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value ? '甲烷目標已指定' : '甲烷隨機')
+  return summary.join(' · ')
+})
+const deckValidation = computed(() => {
+  if (!hostMode.value) return ''
+  if (customDeck.value.length !== Number(roomSize.value) || customDeck.value.some((role) => !role)) return 'Fill every deck slot.'
+  if (new Set(customDeck.value).size !== customDeck.value.length) return 'Roles cannot be duplicated.'
+  if (customDeck.value.filter((role) => role === 'FATCAT').length !== 1) return 'Deck must contain exactly one Fatcat.'
+  if (fatcatHintRoles.value.length > 3) return 'Choose at most three absent-role hints.'
+  if (hostDeckHasHighRabbit.value && highRabbitRole.value && !highRabbitRoleOptions.value.includes(highRabbitRole.value)) return 'High Rabbit illusion must be a role in this deck.'
+  if (hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value && !hostMethaneTargetOptions.value.some((player) => String(player.userId) === String(hostMethaneHallucinationTargetId.value))) return 'Methane hallucination target must be a valid non-Methane non-Fatcat player.'
+  return ''
+})
 
 const setupRoomPlayers = computed(() => {
   const backendPlayers = gameState.value?.players || []
   return backendPlayers.length ? backendPlayers : onlineRoomPlayers.value
 })
+
+const hostMethaneTargetOptions = computed(() => setupRoomPlayers.value
+  .map((player, index) => ({ ...player, role: customDeck.value[index] }))
+  .filter((player) => player.userId != null && player.role && !['FATCAT', 'WEREWOLF', 'METHANE'].includes(player.role)))
 
 const roomPlayerCount = computed(() => setupRoomPlayers.value.length)
 const roomCapacity = computed(() => {
@@ -424,6 +489,58 @@ const roomSeatSlots = computed(() => {
 const roomOccupancyText = computed(() => {
   return `${roomPlayerCount.value} / ${roomCapacity.value} players`
 })
+
+const saveHostDeck = () => {
+  if (deckValidation.value) { actionError.value = deckValidation.value; return }
+  const name = deckName.value.trim(); if (!name) { actionError.value = 'Enter a deck name.'; return }
+  const deck = { name, size: Number(roomSize.value), roles: [...customDeck.value], fatcatHintRoles: [...fatcatHintRoles.value], highRabbitRole: highRabbitRole.value || '', methaneHallucinationTargetId: hostMethaneHallucinationTargetId.value || '' }
+  savedDecks.value = [...savedDecks.value.filter((item) => item.name !== name), deck]
+  window.localStorage.setItem(HOST_DECKS_KEY, JSON.stringify(savedDecks.value)); selectedSavedDeck.value = name; actionError.value = ''
+}
+const loadHostDeck = () => { const deck = savedDecks.value.find((item) => item.name === selectedSavedDeck.value); if (!deck) return; roomSize.value = Number(deck.size); customDeck.value = [...deck.roles]; fatcatHintRoles.value = [...(deck.fatcatHintRoles || [])]; highRabbitRole.value = deck.highRabbitRole || ''; hostMethaneHallucinationTargetId.value = deck.methaneHallucinationTargetId || '' }
+const hostStartPayload = () => hostMode.value ? { hostMode: true, customDeck: [...customDeck.value], fatcatHintRoles: fatcatHintRoles.value.length ? [...fatcatHintRoles.value] : null, highRabbitRole: highRabbitRole.value || null, methaneHallucinationTargetId: hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value ? Number(hostMethaneHallucinationTargetId.value) : null } : {}
+
+const voteLogTypes = new Set(['SELECT_NOMINATION', 'SELECT_EXECUTION_VOTE', 'CONFIRM_VOTE', 'CANCEL_VOTE', 'SKIP_VOTE', 'TALLY_VOTES', 'START_NOMINATION'])
+const hostPlayerLabel = (playerId) => {
+  if (playerId == null) return '-'
+  const player = gameState.value?.players?.find((item) => String(item.userId) === String(playerId))
+  return player ? `Seat ${player.seatNumber} · ${player.username}` : `Player ${playerId}`
+}
+const hostVoteRows = computed(() => {
+  if (!gameState.value || !['NOMINATION', 'VOTING'].includes(phase.value)) return []
+  return gameState.value.players
+    .filter((player) => player.alive || gameState.value.finalVoteEligiblePlayerIds?.includes(player.userId))
+    .map((player) => ({ ...player, choice: player.votedTargetId == null ? null : hostPlayerLabel(player.votedTargetId) }))
+    .sort((a, b) => (a.seatNumber || 999) - (b.seatNumber || 999))
+})
+const hostConfirmedVotes = computed(() => hostVoteRows.value.filter((player) => player.voteConfirmed).length)
+const hostVoteTotals = computed(() => {
+  const totals = new Map()
+  for (const player of hostVoteRows.value) {
+    if (player.votedTargetId == null) continue
+    const key = String(player.votedTargetId)
+    totals.set(key, (totals.get(key) || 0) + 1)
+  }
+  return [...totals.entries()].map(([playerId, count]) => ({ playerId, label: hostPlayerLabel(playerId), count })).sort((a, b) => b.count - a.count)
+})
+const hostActivityLogs = computed(() => [...(gameState.value?.logs || [])].filter((entry) => !voteLogTypes.has(entry.actionType)).reverse().slice(0, 40))
+const hostActionLabel = (actionType) => ({
+  START_GAME: '遊戲開始', FATCAT_KILL: '肥貓踢人', FATCAT_TEAM_HINT: '查看肥貓陣營',
+  METHANE_CHECK: '甲烷查驗', LIVER_ACTION: '施加爆肝', CANMAN_ACTION: '罐頭邀約',
+  NANGONG_ACTION: '南宮邀約', STR_ACTION: '交換座位', STR_SKIP: '跳過交換',
+  MUBAIMU_ACTION: '分享蛋塔', SHUSHU_ACTION: '邀請旅遊', CHEN_ACTION: '臣本布衣發動',
+  SALTED_FISH_STAB: '鹹魚發動', BOT_AUTO: 'Bot 行動'
+}[actionType] || (actionType || '系統事件').replaceAll('_', ' '))
+const hostLogTime = (timestamp) => {
+  if (!timestamp) return '--:--:--'
+  const date = new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? '--:--:--' : date.toLocaleTimeString('zh-TW', { hour12: false })
+}
+const hostLogDetail = (entry) => {
+  if (entry.message) return entry.message
+  const targets = [entry.targetId, entry.targetId2].filter((id) => id != null).map(hostPlayerLabel)
+  return targets.length ? targets.join(' / ') : '已送出'
+}
 
 const nominatedPlayer = computed(() => {
   const nomineeId = gameState.value?.nominatedPlayerId
@@ -458,12 +575,13 @@ const canUseDayVote = computed(() => {
 const canUseFatcatTeamHint = computed(() => {
   if (!gameState.value || !myPlayer.value?.alive) return false
   if (gameState.value.currentRound !== 1 || !isNight.value) return false
-  return myPlayer.value.role === 'FATCAT' || fatcatHorcruxRoles.has(myPlayer.value.role)
+  return myEffectiveRole.value === 'FATCAT' || fatcatHorcruxRoles.has(myPlayer.value.role)
 })
 
 const canUseFatcatKill = computed(() => {
   if (!gameState.value || !myPlayer.value?.alive || phase.value !== 'NIGHT_START') return false
   if (gameState.value.currentRound === 1) return false
+  if (myPlayer.value.role === 'HIGH_RABBIT' && myEffectiveRole.value === 'FATCAT') return true
   return gameState.value.fatcatKillerPlayerId != null
     ? String(gameState.value.fatcatKillerPlayerId) === String(myPlayer.value.userId)
     : myPlayer.value.role === 'FATCAT'
@@ -476,7 +594,7 @@ const skippedThisRound = (rounds, playerId) => {
 
 const canUseChenAction = computed(() => {
   if (!gameState.value || !myPlayer.value?.alive) return false
-  if (myPlayer.value.role !== 'CHEN' || phase.value !== 'DAY_START') return false
+  if (myEffectiveRole.value !== 'CHEN' || phase.value !== 'DAY_START') return false
   if (gameState.value.chenUsedPlayerIds?.includes(myPlayer.value.userId)) return false
   return !skippedThisRound(gameState.value.chenSkippedRounds, myPlayer.value.userId)
 })
@@ -511,10 +629,10 @@ const currentPhaseText = computed(() => {
   if (phase.value === 'SHUSHU_ACTION' && canActAsRole('SHUSHU')) {
     return `Shushu: choose travel companions (${shushuSelection.value.length}/2)`
   }
-  if (phase.value === 'PH_SERVICE_ACTION' && myPlayer.value?.role === 'PH_SERVICE') {
+  if (phase.value === 'PH_SERVICE_ACTION' && canActAsRole('PH_SERVICE')) {
     return 'PH Service: choose a volunteer role to hack'
   }
-  if (phase.value === 'NIGHT_START' && myPlayer.value?.role === 'FATCAT' && gameState.value.currentRound === 1) {
+  if (phase.value === 'NIGHT_START' && canActAsRole('FATCAT') && gameState.value.currentRound === 1) {
     return 'Fatcat: scout absent volunteer roles. No killing on the first night.'
   }
   return phaseLabels[phase.value] || phase.value
@@ -785,10 +903,12 @@ const activeRoleAssignments = () => {
 
 const startGame = async () => {
   try {
+    if (deckValidation.value) throw new Error(deckValidation.value)
     const response = await emitGameAction(`/room/start/${roomId.value}?mode=${selectedMode.value}`, {
       roomId: roomId.value,
       playerId: Number(userId.value),
-      roleAssignments: activeRoleAssignments()
+      roleAssignments: activeRoleAssignments(),
+      ...hostStartPayload()
     })
     gameState.value = response.gameState
     actionError.value = ''
@@ -808,7 +928,7 @@ const currentRoomPlayers = () => {
     .filter((player) => Number.isFinite(player.userId))
 
   const currentUserId = Number(userId.value)
-  if (Number.isFinite(currentUserId) && !players.some((player) => player.userId === currentUserId)) {
+  if (!hostMode.value && Number.isFinite(currentUserId) && !players.some((player) => player.userId === currentUserId)) {
     players.push({
       userId: currentUserId,
       nickname: displayName.value,
@@ -821,10 +941,10 @@ const currentRoomPlayers = () => {
 
 const fillBotsAndStartGame = async () => {
   try {
-    await requestRoomList()
     const fillResponse = await emitGameAction(`/room/fill-bots/${roomId.value}?count=${roomSize.value}`, {
       roomId: roomId.value,
       playerId: Number(userId.value),
+      hostMode: hostMode.value,
       players: currentRoomPlayers()
     })
     gameState.value = fillResponse.gameState
@@ -832,7 +952,8 @@ const fillBotsAndStartGame = async () => {
     const startResponse = await emitGameAction(`/room/start/${roomId.value}?mode=${selectedMode.value}`, {
       roomId: roomId.value,
       playerId: Number(userId.value),
-      roleAssignments: activeRoleAssignments()
+      roleAssignments: activeRoleAssignments(),
+      ...hostStartPayload()
     })
     gameState.value = startResponse.gameState
     actionError.value = ''
@@ -847,6 +968,7 @@ const fillBotsOnly = async () => {
     const response = await emitGameAction(`/room/fill-bots/${roomId.value}?count=${roomSize.value}`, {
       roomId: roomId.value,
       playerId: Number(userId.value),
+      hostMode: hostMode.value,
       players: currentRoomPlayers()
     })
     gameState.value = response.gameState
@@ -1021,6 +1143,7 @@ const fetchReveal = async () => {
       </label>
       <div class="main-actions">
         <button class="primary-button" @click="createRoom">Create room</button>
+        <button class="action-button" @click="createHostedRoom">Host customized game</button>
         <button class="secondary-button" @click="openRoomList">Join room</button>
       </div>
 
@@ -1048,7 +1171,7 @@ const fetchReveal = async () => {
     <section v-else class="game-board">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Room {{ roomId }} | Player {{ userId }} | {{ displayName }}<span v-if="isRoomHost"> | Host</span></p>
+          <p class="eyebrow">Room {{ roomId }} | {{ isHostSpectator ? 'Host spectator' : `Player ${userId}` }} | {{ displayName }}<span v-if="isRoomHost"> | Host</span></p>
           <h1>{{ currentPhaseText }}</h1>
         </div>
         <div class="topbar-actions">
@@ -1140,8 +1263,15 @@ const fetchReveal = async () => {
           </label>
         </div>
 
+        <section v-if="isHostSpectator" class="host-config-panel">
+          <div class="host-config-header"><div><span class="eyebrow">Customized game</span><h3>Deck and controlled outcomes</h3></div><select v-model="selectedSavedDeck" @change="loadHostDeck"><option value="">Load saved deck</option><option v-for="deck in savedDecks" :key="deck.name" :value="deck.name">{{ deck.name }}</option></select></div>
+          <div class="deck-slot-grid"><label v-for="(_, index) in customDeck" :key="index" class="deck-slot-field"><span>Seat {{ index + 1 }}</span><select v-model="customDeck[index]"><option value="">Choose role</option><option v-for="role in customRoleOptions" :key="role" :value="role">{{ roleName(role) }}</option></select></label></div>
+          <section class="host-advanced-panel"><button class="host-advanced-toggle" type="button" @click="hostAdvancedOpen = !hostAdvancedOpen"><span>Advanced</span><small>{{ hostAdvancedSummary }}</small><strong>{{ hostAdvancedOpen ? '收合' : '展開' }}</strong></button><div v-if="hostAdvancedOpen" class="host-advanced-body"><div class="host-random-grid"><label class="field"><span>肥貓首夜不在場角色情報</span><select v-model="fatcatHintRoles" multiple size="5"><option v-for="role in availableFatcatHintRoles" :key="role" :value="role">{{ roleName(role) }}</option></select></label><label v-if="hostDeckHasHighRabbit" class="field"><span>高能兔幻覺角色</span><select v-model="highRabbitRole"><option value="">隨機場上角色</option><option v-for="role in highRabbitRoleOptions" :key="role" :value="role">{{ roleName(role) }}</option></select></label><div v-else class="host-controlled-note"><span>高能兔幻覺角色</span><strong>牌組未包含高能兔</strong></div><label v-if="hostDeckHasMethane" class="field"><span>甲烷幻覺目標</span><select v-model="hostMethaneHallucinationTargetId"><option value="">隨機合格玩家</option><option v-for="player in hostMethaneTargetOptions" :key="player.userId" :value="String(player.userId)">Seat {{ player.seatNumber || '?' }} · {{ player.username }} · {{ roleName(player.role) }}</option></select></label><div v-else class="host-controlled-note"><span>甲烷幻覺目標</span><strong>牌組未包含甲烷</strong></div></div><div class="host-controlled-note full-row"><span>其他可控要素</span><strong>安弟雲、草盛豆苗稀情報、Guoguo 提示等仍由當下場況自動決定</strong></div></div></section>
+          <p v-if="deckValidation" class="validation-text">{{ deckValidation }}</p><div class="save-deck-row"><input v-model="deckName" type="text" placeholder="Deck name" /><button class="secondary-button" @click="saveHostDeck">Save as deck</button></div>
+        </section>
+
         <div v-if="isRoomHost" class="button-row">
-          <button class="primary-button" @click="startGame">Start game</button>
+          <button class="primary-button" :disabled="Boolean(deckValidation)" @click="startGame">Start game</button>
           <button class="secondary-button" @click="fillBotsOnly">Fill bots</button>
           <button class="action-button" @click="fillBotsAndStartGame">Fill bots and start</button>
           <button class="secondary-button" @click="createMockRoom">Create test room</button>
@@ -1149,7 +1279,25 @@ const fetchReveal = async () => {
         </div>
       </section>
 
-      <section v-if="gameState" class="status-layout">
+      <section v-if="gameState && isHostSpectator && gameState.status !== 'WAITING'" class="host-observer-panel">
+        <div class="observer-header"><div><span class="eyebrow">Host observer</span><h2>遊戲監看</h2></div><button v-if="gameState.status === 'PLAYING'" class="secondary-button" @click="autoPlayBot">{{ botActionButtonText }}</button></div>
+        <div class="observer-role-grid">
+          <article v-for="player in gameState.players" :key="player.userId" class="observer-player-row"><div><strong>{{ player.seatNumber }} · {{ player.username }}</strong><span>{{ roleName(player.role) }}</span></div><span :class="['observer-status', player.alive ? 'alive' : 'dead']">{{ player.alive ? '存活' : '離場' }}</span></article>
+        </div>
+        <section v-if="hostVoteRows.length" class="observer-vote-board">
+          <div class="observer-section-header"><div><span class="eyebrow">{{ phase === 'NOMINATION' ? 'Nomination' : 'Execution vote' }}</span><h3>投票進度</h3></div><strong>{{ hostConfirmedVotes }} / {{ hostVoteRows.length }} 已確認</strong></div>
+          <div v-if="hostVoteTotals.length" class="vote-total-strip"><span v-for="item in hostVoteTotals" :key="item.playerId"><strong>{{ item.count }}</strong> {{ item.label }}</span></div>
+          <div class="observer-vote-table"><div v-for="player in hostVoteRows" :key="player.userId" class="observer-vote-row"><span class="observer-seat">{{ player.seatNumber }}</span><strong>{{ player.username }}</strong><span class="observer-choice">{{ player.choice || '跳過 / 尚未選擇' }}</span><span :class="['vote-state', player.voteConfirmed ? 'confirmed' : 'pending']">{{ player.voteConfirmed ? '已確認' : '未確認' }}</span></div></div>
+        </section>
+        <section class="observer-activity">
+          <div class="observer-section-header"><div><span class="eyebrow">Activity</span><h3>技能與系統事件</h3></div><span>最近 {{ hostActivityLogs.length }} 筆</span></div>
+          <div v-if="Object.keys(gameState.nightActions || {}).length" class="pending-action-strip"><span v-for="(target, action) in gameState.nightActions" :key="action"><strong>{{ hostActionLabel(action) }}</strong> → {{ hostPlayerLabel(target) }}</span></div>
+          <p v-if="!hostActivityLogs.length" class="empty-state">尚無技能或系統事件。</p>
+          <div v-else class="observer-log-table"><div v-for="(entry, index) in hostActivityLogs" :key="entry.timestamp || index" class="observer-event-row"><time>{{ hostLogTime(entry.timestamp) }}</time><div class="observer-event-actor"><strong>{{ entry.username || '系統' }}</strong><span v-if="entry.role">{{ roleName(entry.role) }}</span></div><strong class="observer-event-action">{{ hostActionLabel(entry.actionType) }}</strong><span class="observer-event-detail">{{ hostLogDetail(entry) }}</span></div></div>
+        </section>
+      </section>
+
+      <section v-if="gameState && !isHostSpectator" class="status-layout">
         <div class="self-panel">
           <span class="eyebrow">My status</span>
           <h2>{{ roleName(myDisplayedRole) }}</h2>
@@ -1349,7 +1497,7 @@ const fetchReveal = async () => {
         <button v-if="canUseFatcatTeamHint" class="action-button" @click="fatcatTeamHint">
           {{ fatcatHintButtonText }}
         </button>
-        <label v-if="myPlayer?.role === 'PH_SERVICE' && phase === 'PH_SERVICE_ACTION'" class="inline-field">
+        <label v-if="canActAsRole('PH_SERVICE') && phase === 'PH_SERVICE_ACTION'" class="inline-field">
           <span>Hack role</span>
           <select v-model="phServiceTargetRole">
             <option v-for="role in volunteerRoleOptions" :key="role" :value="role">
@@ -1357,10 +1505,10 @@ const fetchReveal = async () => {
             </option>
           </select>
         </label>
-        <button v-if="myPlayer?.role === 'PH_SERVICE' && phase === 'PH_SERVICE_ACTION'" class="action-button" @click="sendPhServiceAction">
+        <button v-if="canActAsRole('PH_SERVICE') && phase === 'PH_SERVICE_ACTION'" class="action-button" @click="sendPhServiceAction">
           Hack account
         </button>
-        <button v-if="myPlayer?.role === 'EMPEROR' && gameState.currentRound === 1 && isNight" class="action-button" @click="emperorReveal">
+        <button v-if="canActAsRole('EMPEROR') && gameState.currentRound === 1 && isNight" class="action-button" @click="emperorReveal">
           Reveal all roles
         </button>
         <button v-if="canActAsRole('STR') && phase === 'STR_ACTION'" class="action-button" @click="strSkip">
@@ -2078,6 +2226,32 @@ button:disabled {
     font-size: 22px;
   }
 }
+
+.host-config-panel,.host-observer-panel{margin-top:18px;padding:18px;border:1px solid #c8d2dc;border-radius:8px;background:#f7fafc}.host-config-header,.observer-header,.save-deck-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.deck-slot-grid,.observer-role-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px}.deck-slot-field{display:grid;gap:5px;font-size:13px;font-weight:700}.host-random-grid,.observer-data-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.host-advanced-panel{margin-top:16px;border:1px solid #d7e0e8;border-radius:8px;background:#fff;overflow:hidden}.host-advanced-toggle{width:100%;min-height:48px;padding:10px 12px;display:grid;grid-template-columns:110px 1fr auto;align-items:center;gap:12px;border:0;background:transparent;color:#243447;text-align:left;cursor:pointer}.host-advanced-toggle span{font-weight:850}.host-advanced-toggle small{color:#66788a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.host-advanced-toggle strong{font-size:12px;color:#34516c}.host-advanced-body{padding:12px;border-top:1px solid #d7e0e8}.host-controlled-note{display:grid;gap:8px;align-content:start;padding:10px 12px;border:1px solid #d7e0e8;border-radius:8px;background:#f4f8fb}.host-controlled-note span{font-size:13px;font-weight:700;color:#536273}.host-controlled-note strong{font-size:14px;color:#243447}.host-controlled-note.full-row{margin-top:12px}.night-mode .host-advanced-panel{background:#171c25;border-color:#46505e}.night-mode .host-advanced-body{border-color:#46505e}.night-mode .host-controlled-note{background:rgba(15,23,42,.45);border-color:#46505e}.night-mode .host-advanced-toggle{color:#e5edf5}.night-mode .host-advanced-toggle small,.night-mode .host-controlled-note span{color:#aebccd}.night-mode .host-controlled-note strong{color:#e5edf5}.save-deck-row{margin-top:14px}.save-deck-row input{flex:1}.validation-text{margin-top:10px;color:#b42318;font-weight:700}.observer-player-row,.observer-log-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-bottom:1px solid #dbe3ea}.observer-player-row div{display:grid;gap:3px}.observer-status.alive{color:#157347}.observer-status.dead{color:#b42318}.night-mode .host-observer-panel{background:#202631;border-color:#4a5565}@media(max-width:700px){.host-random-grid,.observer-data-grid{grid-template-columns:1fr}.host-config-header,.save-deck-row{align-items:stretch;flex-direction:column}.host-advanced-toggle{grid-template-columns:1fr auto}.host-advanced-toggle small{grid-column:1/3;white-space:normal}}
+
+.observer-vote-board,.observer-activity{margin-top:18px;border-top:1px solid #d7e0e8;padding-top:16px}
+.observer-section-header{display:flex;align-items:end;justify-content:space-between;gap:12px}
+.observer-section-header h3{margin:3px 0 0}
+.vote-total-strip,.pending-action-strip{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.vote-total-strip span,.pending-action-strip span{padding:7px 9px;border:1px solid #d7e0e8;border-radius:6px;background:#fff;font-size:13px}
+.observer-vote-table,.observer-log-table{margin-top:10px;border:1px solid #d7e0e8;border-radius:6px;overflow:hidden}
+.observer-vote-row{display:grid;grid-template-columns:34px minmax(110px,.8fr) minmax(180px,1.5fr) 72px;align-items:center;gap:10px;min-height:42px;padding:6px 10px;border-bottom:1px solid #e3e9ef}
+.observer-vote-row:last-child,.observer-event-row:last-child{border-bottom:0}
+.observer-seat{font-weight:800;color:#64748b}
+.observer-choice{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vote-state{font-size:12px;font-weight:800;text-align:right}
+.vote-state.confirmed{color:#157347}.vote-state.pending{color:#9a6700}
+.observer-event-row{display:grid;grid-template-columns:72px minmax(120px,.8fr) minmax(130px,.8fr) minmax(180px,1.5fr);align-items:center;gap:12px;min-height:46px;padding:7px 10px;border-bottom:1px solid #e3e9ef;font-size:13px}
+.observer-event-row time{font-variant-numeric:tabular-nums;color:#64748b}
+.observer-event-actor{display:grid;gap:2px}.observer-event-actor span{color:#64748b;font-size:12px}
+.observer-event-detail{overflow-wrap:anywhere;color:#536273}
+.night-mode .observer-vote-board,.night-mode .observer-activity{border-color:#46505e}
+.night-mode .vote-total-strip span,.night-mode .pending-action-strip span{background:#171c25;border-color:#46505e}
+.night-mode .observer-vote-table,.night-mode .observer-log-table{border-color:#46505e}
+.night-mode .observer-vote-row,.night-mode .observer-event-row{border-color:#353e4b}
+.night-mode .observer-event-detail,.night-mode .observer-event-row time,.night-mode .observer-event-actor span{color:#aebccd}
+@media(max-width:700px){.observer-vote-row{grid-template-columns:28px 1fr 70px}.observer-choice{grid-column:2/4;white-space:normal}.observer-event-row{grid-template-columns:64px 1fr}.observer-event-action,.observer-event-detail{grid-column:2}.observer-section-header{align-items:flex-start;flex-direction:column}}
 </style>
+
 
 
