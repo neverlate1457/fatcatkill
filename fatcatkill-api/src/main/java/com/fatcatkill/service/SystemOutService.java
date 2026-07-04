@@ -39,6 +39,10 @@ public class SystemOutService {
         System.out.println(format(roomId, null, null, actionType, null, null, message));
     }
 
+    public void error(String actionType, String message) {
+        System.out.println(format(null, null, null, actionType, null, null, message));
+    }
+
     private String format(String roomId, Integer round, String phase, String actionType, Long targetId, Long targetId2, String detail) {
         StringBuilder builder = new StringBuilder("[FatCatKill] ");
         builder.append(Instant.now());

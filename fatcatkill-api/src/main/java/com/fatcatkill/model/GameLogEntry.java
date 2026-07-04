@@ -1,5 +1,7 @@
 package com.fatcatkill.model;
 
+import java.util.Map;
+
 public class GameLogEntry {
     private String timestamp;
     private Long playerId;
@@ -11,6 +13,9 @@ public class GameLogEntry {
     private Long targetId2;
     private String targetName2;
     private String message;
+    private String messageKey;
+    private Map<String, Object> messageParams;
+    private String messageFallback;
 
     public GameLogEntry() {}
 
@@ -54,4 +59,12 @@ public class GameLogEntry {
 
     public String getMessage() { return message; }
     public void setMessage(String message) { this.message = message; }
+    public String getMessageKey() { return messageKey; }
+    public void setMessageKey(String messageKey) { this.messageKey = messageKey; }
+
+    public Map<String, Object> getMessageParams() { return messageParams; }
+    public void setMessageParams(Map<String, Object> messageParams) { this.messageParams = messageParams; }
+
+    public String getMessageFallback() { return messageFallback; }
+    public void setMessageFallback(String messageFallback) { this.messageFallback = messageFallback; }
 }

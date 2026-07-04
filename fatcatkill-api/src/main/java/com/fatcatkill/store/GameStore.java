@@ -8,11 +8,14 @@ import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.repository.GameRecordRepository;
 import com.fatcatkill.repository.GameStateRepository;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +39,33 @@ public class GameStore {
         this.repository = repository;
         this.gameRecordRepository = gameRecordRepository;
         this.objectMapper = objectMapper;
+    }
+
+    @PostConstruct
+    public void clearUnfinishedPersistedGamesOnStartup() {
+        if (repository == null) return;
+
+        List<String> roomsToDelete = new ArrayList<>();
+        for (PersistedGameState persisted : repository.findAll()) {
+            if (shouldDropPersistedGame(persisted)) {
+                roomsToDelete.add(persisted.getRoomId());
+            }
+        }
+
+        for (String roomId : roomsToDelete) {
+            activeGames.remove(roomId);
+            repository.deleteById(roomId);
+        }
+    }
+
+    private boolean shouldDropPersistedGame(PersistedGameState persisted) {
+        if (persisted == null || persisted.getRoomId() == null) return false;
+        try {
+            GameState game = objectMapper.readValue(persisted.getStateJson(), GameState.class);
+            return game == null || game.getStatus() != RoomStatus.FINISHED;
+        } catch (RuntimeException ex) {
+            return true;
+        }
     }
 
     public synchronized void saveGame(GameState gameState) {
@@ -97,10 +127,22 @@ public class GameStore {
         record.setWinnerCamp(game.getWinnerCamp());
         record.setRoundsPlayed(game.getCurrentRound());
         record.setPlayerCount(game.getPlayers() == null ? 0 : game.getPlayers().size());
+        record.setParticipantAccountIds(participantAccountIds(game));
         record.setStartedAt(parseStartedAt(game.getStartedAt()));
         record.setEndTime(LocalDateTime.now());
         record.setFinalStateJson(stateJson);
         return record;
+    }
+
+    private String participantAccountIds(GameState game) {
+        if (game.getPlayers() == null) return "";
+        return game.getPlayers().stream()
+                .map(player -> player.getAccountId())
+                .filter(id -> id != null)
+                .distinct()
+                .sorted()
+                .map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private Camp resolveWinnerCamp(GameState game) {

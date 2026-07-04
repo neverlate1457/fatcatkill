@@ -3,6 +3,7 @@ package com.fatcatkill.controller;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.model.PlayerState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.store.GameStore;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,7 +30,7 @@ public class GameLogController {
         GameState game = gameStore.getGame(roomId);
         if (game == null) return ResponseEntity.notFound().build();
         if (game.getStatus() != RoomStatus.FINISHED) {
-            return ResponseEntity.status(409).body("Game logs are available after the game ends.");
+            return ResponseEntity.status(409).body(Map.of("message", MessagePayload.of("backend.game.logsUnavailable", "Game logs are available after the game ends.")));
         }
 
         Map<String, Object> result = new HashMap<>();
@@ -48,3 +49,4 @@ public class GameLogController {
         return ResponseEntity.ok(result);
     }
 }
+

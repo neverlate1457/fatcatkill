@@ -47,13 +47,13 @@ public class GameState {
     private Integer xiaoenRedirectRound;
     private Map<Long, Integer> dayVoteCounts = new ConcurrentHashMap<>();
     private Map<Long, Integer> lastVoteCounts = new ConcurrentHashMap<>();
-    private String lastVoteResult;
-    private String publicMessage;
+    private Object lastVoteResult;
+    private Object publicMessage;
     private Map<Long, Integer> delayedDeathRounds = new ConcurrentHashMap<>();
     private Map<Long, Integer> mubaimuDoomRounds = new ConcurrentHashMap<>();
     private Map<Long, Integer> barkKingDoomRounds = new ConcurrentHashMap<>();
     private Map<Long, Integer> drunkUntilRounds = new ConcurrentHashMap<>();
-    private Map<Long, String> privateMessages = new ConcurrentHashMap<>();
+    private Map<Long, Object> privateMessages = new ConcurrentHashMap<>();
     private Map<Long, Integer> strOriginalSeatNumbers = new ConcurrentHashMap<>();
     private Map<Long, Integer> strTemporarySeatNumbers = new ConcurrentHashMap<>();
     private Set<Integer> strSwappedSeatNumbers = ConcurrentHashMap.newKeySet();
@@ -77,4 +77,3 @@ public class GameState {
         logs.add(entry);
     }
 }
-

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { allowedRoute, bindActorIdentity, connectedPlayersForRoom, hostOnlyRoute, sanitizeGameState, validateIdentityClaim } = require('./server');
+const { allowedRoute, bindActorIdentity, connectedPlayersForRoom, formatErrorMessage, hostOnlyRoute, sanitizeGameState, validateIdentityClaim } = require('./server');
+const { authHeaders } = require('./httpProxyRoutes');
 
 test('route allowlist rejects arbitrary and cross-room endpoints', () => {
   assert.equal(allowedRoute('POST', '/game/action', '1234'), true);
@@ -92,9 +93,9 @@ test('High Energy Rabbit illusion reveals the perceived role ability phase', () 
 test('fill-bot player payload excludes host spectators', () => {
   const participants = new Map([
     ['host', { userId: 99, nickname: 'Host', isSpectator: true }],
-    ['player', { userId: 7, nickname: 'Human', isSpectator: false }]
+    ['player', { userId: 7, nickname: 'Human', isSpectator: false, accountId: 42, sessionToken: 'token-42' }]
   ]);
-  assert.deepEqual(connectedPlayersForRoom(participants), [{ userId: 7, nickname: 'Human' }]);
+  assert.deepEqual(connectedPlayersForRoom(participants), [{ userId: 7, nickname: 'Human', accountId: 42, sessionToken: 'token-42' }]);
 });
 
 test('bot automation and room setup are host-only', () => {
@@ -109,6 +110,35 @@ test('room identity claims prevent switching IDs and duplicate IDs', () => {
   };
 
   assert.equal(validateIdentityClaim(claims, 'client-a-1234567', 1, 'room-1'), null);
-  assert.match(validateIdentityClaim(claims, 'client-a-1234567', 2, 'room-1'), /already joined/);
-  assert.match(validateIdentityClaim(claims, 'client-b-1234567', 1, 'room-1'), /already in use/);
+  const browserClaimError = validateIdentityClaim(claims, 'client-a-1234567', 2, 'room-1');
+  assert.equal(browserClaimError.key, 'gateway.room.browserAlreadyJoined');
+  assert.match(browserClaimError.fallback, /already joined/);
+  const duplicateIdError = validateIdentityClaim(claims, 'client-b-1234567', 1, 'room-1');
+  assert.equal(duplicateIdError.key, 'gateway.room.playerIdInUse');
+  assert.match(duplicateIdError.fallback, /already in use/);
+});
+
+test('gateway error formatter preserves message payloads', () => {
+  const payload = { key: 'gateway.action.roomMismatch', params: {}, fallback: 'Room mismatch.' };
+  assert.deepEqual(formatErrorMessage({ payload }), payload);
+  assert.deepEqual(formatErrorMessage(new Error('Boom')), {
+    key: 'gateway.actionFailed',
+    params: {},
+    fallback: 'Boom'
+  });
+});
+test('authHeaders forwards history credentials', () => {
+  const req = {
+    get(name) {
+      return {
+        'x-user-id': '42',
+        'x-auth-token': 'token-abc'
+      }[name];
+    }
+  };
+
+  assert.deepEqual(authHeaders(req), {
+    'X-User-Id': '42',
+    'X-Auth-Token': 'token-abc'
+  });
 });

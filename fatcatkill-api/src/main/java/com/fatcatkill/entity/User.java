@@ -25,6 +25,9 @@ public class User {
     @Column(name = "games_won")
     private Integer gamesWon = 0;
 
+    @Column(name = "session_token", length = 64)
+    private String sessionToken;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 }

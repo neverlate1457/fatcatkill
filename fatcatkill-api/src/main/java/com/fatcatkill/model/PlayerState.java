@@ -7,6 +7,7 @@ import lombok.Data;
 public class PlayerState {
     private Long userId;
     private String username;
+    private Long accountId;
     private Integer seatNumber; 
     private Role role;          
     private boolean isAlive = true; 

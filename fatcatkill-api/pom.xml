@@ -68,6 +68,18 @@
 	<build>
 		<plugins>
 			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<debug>false</debug>
+						<logging.level.root>warn</logging.level.root>
+						<logging.level.org.springframework>warn</logging.level.org.springframework>
+						<logging.level.org.hibernate.SQL>warn</logging.level.org.hibernate.SQL>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>

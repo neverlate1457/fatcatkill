@@ -3,7 +3,9 @@ package com.fatcatkill;
 import com.fatcatkill.controller.CreateMockRoomController;
 import com.fatcatkill.controller.StartGameController;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.enums.Role;
+import com.fatcatkill.store.GameStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,6 +25,9 @@ class RoomControllerTests {
 
     @Autowired
     private StartGameController startGameController;
+
+    @Autowired
+    private GameStore gameStore;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -84,6 +89,66 @@ class RoomControllerTests {
         assertThat(game.getPlayers()).noneMatch(player -> player.getUserId().equals(99L));
     }
 
+
+    @Test
+    void startCreatesWaitingRoomFromConnectedPlayers() {
+        String roomId = "start-from-connected";
+        ResponseEntity<?> response = startGameController.execute(
+                roomId,
+                "OLD_HOME",
+                Map.of(
+                        "playerId", 1,
+                        "players", List.of(
+                                Map.of("userId", 1, "nickname", "Host"),
+                                Map.of("userId", 2, "nickname", "Player 2"),
+                                Map.of("userId", 3, "nickname", "Player 3"),
+                                Map.of("userId", 4, "nickname", "Player 4"),
+                                Map.of("userId", 5, "nickname", "Player 5"),
+                                Map.of("userId", 6, "nickname", "Player 6"),
+                                Map.of("userId", 7, "nickname", "Player 7")
+                        )
+                )
+        );
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        GameState game = gameStore.getGame(roomId);
+        assertThat(game).isNotNull();
+        assertThat(game.getStatus()).isEqualTo(com.fatcatkill.enums.RoomStatus.PLAYING);
+        assertThat(game.getPlayers()).hasSize(7);
+        assertThat(game.getPlayers()).extracting(player -> player.getUsername()).contains("Host", "Player 7");
+        assertThat(game.getPlayers()).anyMatch(player -> player.getRole() == Role.FATCAT);
+    }
+
+    @Test
+    void failedStartDoesNotApplyPlayingState() {
+        controller.fillBots("failed-start-clean", 7, Map.of());
+        GameState before = (GameState) gameStore.getGame("failed-start-clean");
+        before.getPlayers().forEach(player -> {
+            player.setRole(Role.VILLAGER);
+            player.setAlive(false);
+            player.setSeatNumber(null);
+            player.setVotedTargetId(99L);
+            player.setVoteConfirmed(true);
+        });
+        gameStore.saveGame(before);
+
+        ResponseEntity<?> response = startGameController.execute(
+                "failed-start-clean",
+                "OLD_HOME",
+                Map.of()
+        );
+
+        assertThat(response.getStatusCode().is4xxClientError()).isTrue();
+        GameState after = gameStore.getGame("failed-start-clean");
+        assertThat(after.getStatus()).isNotEqualTo(com.fatcatkill.enums.RoomStatus.PLAYING);
+        assertThat(after.getPlayers()).allSatisfy(player -> {
+            assertThat(player.isAlive()).isFalse();
+            assertThat(player.getSeatNumber()).isNull();
+            assertThat(player.getVotedTargetId()).isEqualTo(99L);
+            assertThat(player.isVoteConfirmed()).isTrue();
+        });
+    }
+
     @Test
     void oldHomeGameCannotStartWithoutFatcat() {
         controller.fillBots("test-no-fatcat", 7, Map.of());
@@ -103,6 +168,10 @@ class RoomControllerTests {
         );
 
         assertThat(response.getStatusCode().is4xxClientError()).isTrue();
-        assertThat(response.getBody()).asString().contains("Fatcat role is missing");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        MessagePayload message = (MessagePayload) body.get("message");
+        assertThat(message.getKey()).isEqualTo("backend.room.fatcatMissing");
+        assertThat(message.getFallback()).isEqualTo("Cannot start game: Fatcat role is missing.");
     }
 }

@@ -10,6 +10,5 @@ start "FatCatKill API" cmd /k "cd fatcatkill-api && mvn spring-boot:run"
 timeout /t 5 /nobreak >nul
 start "FatCatKill Gateway" cmd /k "cd fatcatkill-gateway && node --env-file=../.env server.js"
 start "FatCatKill Web" cmd /k "cd fatcatkill-web && npm run dev"
-start "FatCatKill Web Debug" cmd /k "cd fatcatkill-web-debug && npm run dev"
 
 endlocal

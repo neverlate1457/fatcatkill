@@ -4,6 +4,7 @@ import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.store.GameStore;
 import org.springframework.stereotype.Service;
@@ -65,7 +66,7 @@ public class DayService {
     public void startVotingPhase(String roomId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null) {
-            throw new IllegalStateException("Game not found.");
+            throw localized("backend.game.notFound", "Game not found.");
         }
 
         if (gameState.getCurrentPhase() == GamePhase.DAY_START) {
@@ -88,26 +89,26 @@ public class DayService {
     public void playerVote(String roomId, Long voterId, Long targetId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.NOMINATION && gameState.getCurrentPhase() != GamePhase.VOTING) {
-            throw new IllegalStateException("Not a voting phase.");
+            throw localized("backend.day.notVotingPhase", "Not a voting phase.");
         }
 
         PlayerState voter = getVotingPlayer(gameState, voterId);
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
 
         if (voter.isVoteConfirmed()) {
-            throw new IllegalStateException("Vote is already confirmed. Cancel before changing it.");
+            throw localized("backend.day.voteAlreadyConfirmedCancelFirst", "Vote is already confirmed. Cancel before changing it.");
         }
 
         if (gameState.getCurrentPhase() == GamePhase.VOTING) {
             Long nominatedPlayerId = gameState.getNominatedPlayerId();
             if (nominatedPlayerId == null) {
-                throw new IllegalStateException("No nominated player is available for the execution vote.");
+                throw localized("backend.day.noNomineeForExecution", "No nominated player is available for the execution vote.");
             }
             if (!nominatedPlayerId.equals(targetId)) {
-                throw new IllegalStateException("Execution votes can only be cast for the nominated player.");
+                throw localized("backend.day.executionVoteTargetOnly", "Execution votes can only be cast for the nominated player.");
             }
         }
 
@@ -121,16 +122,16 @@ public class DayService {
         PlayerState voter = getVotingPlayer(gameState, voterId);
 
         if (voter.isVoteConfirmed()) {
-            throw new IllegalStateException("Vote is already confirmed.");
+            throw localized("backend.day.voteAlreadyConfirmed", "Vote is already confirmed.");
         }
         if (voter.getVotedTargetId() == null) {
-            throw new IllegalStateException("Choose a player or skip before confirming.");
+            throw localized("backend.day.chooseOrSkipBeforeConfirm", "Choose a player or skip before confirming.");
         }
 
         PlayerState target = gameHelper.getAlivePlayer(gameState, voter.getVotedTargetId());
         if (gameState.getCurrentPhase() == GamePhase.VOTING
                 && !voter.getVotedTargetId().equals(gameState.getNominatedPlayerId())) {
-            throw new IllegalStateException("Execution votes can only be cast for the nominated player.");
+            throw localized("backend.day.executionVoteTargetOnly", "Execution votes can only be cast for the nominated player.");
         }
 
         if (gameState.getCurrentPhase() == GamePhase.NOMINATION && triggerKbNominationTrap(gameState, voter, target)) {
@@ -155,7 +156,7 @@ public class DayService {
         GameState gameState = validateVotingGame(roomId);
         PlayerState voter = getVotingPlayer(gameState, voterId);
         if (voter.isVoteConfirmed()) {
-            throw new IllegalStateException("Vote is already confirmed.");
+            throw localized("backend.day.voteAlreadyConfirmed", "Vote is already confirmed.");
         }
         voter.setVotedTargetId(null);
         voter.setVoteConfirmed(true);
@@ -166,10 +167,10 @@ public class DayService {
     private GameState validateVotingGame(String roomId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.NOMINATION && gameState.getCurrentPhase() != GamePhase.VOTING) {
-            throw new IllegalStateException("Not a voting phase.");
+            throw localized("backend.day.notVotingPhase", "Not a voting phase.");
         }
         return gameState;
     }
@@ -190,7 +191,7 @@ public class DayService {
     public void tallyVotesAndNextPhase(String roomId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
 
         if (gameState.getCurrentPhase() == GamePhase.NOMINATION) {
@@ -198,7 +199,7 @@ public class DayService {
         } else if (gameState.getCurrentPhase() == GamePhase.VOTING) {
             tallyExecutionVote(gameState);
         } else {
-            throw new IllegalStateException("Not a voting phase.");
+            throw localized("backend.day.notVotingPhase", "Not a voting phase.");
         }
 
         gameStore.saveGame(gameState);
@@ -207,16 +208,16 @@ public class DayService {
     public String chenAction(String roomId, Long playerId, Long consentNeighborId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.DAY_START) {
-            throw new IllegalStateException("Chen can only declare this during the day discussion phase.");
+            throw localized("backend.chen.onlyDayDiscussion", "Chen can only declare this during the day discussion phase.");
         }
 
         PlayerState actor = gameHelper.validateAndGetPlayer(gameState, playerId, Role.CHEN);
         PlayerState consentNeighbor = gameHelper.getAlivePlayer(gameState, consentNeighborId);
         if (gameState.getChenUsedPlayerIds() != null && gameState.getChenUsedPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Chen has already used this action.");
+            throw localized("backend.chen.alreadyUsed", "Chen has already used this action.");
         }
 
         List<PlayerState> aliveBySeat = gameState.getPlayers().stream()
@@ -226,7 +227,7 @@ public class DayService {
                 .toList();
         int actorIndex = aliveBySeat.indexOf(actor);
         if (actorIndex < 0 || aliveBySeat.size() < 3) {
-            throw new IllegalStateException("Not enough seated alive players for Chen's action.");
+            throw localized("backend.chen.notEnoughSeatedPlayers", "Not enough seated alive players for Chen's action.");
         }
 
         PlayerState left = aliveBySeat.get((actorIndex - 1 + aliveBySeat.size()) % aliveBySeat.size());
@@ -238,13 +239,15 @@ public class DayService {
         } else if (right.getUserId().equals(consentNeighbor.getUserId())) {
             victim = left;
         } else {
-            throw new IllegalArgumentException("Consent player must be Chen's current left or right neighbor.");
+            throw localized("backend.chen.consentMustBeNeighbor", "Consent player must be Chen's current left or right neighbor.");
         }
 
         gameState.setChenPendingKillPlayerId(victim.getUserId());
         gameState.getChenUsedPlayerIds().add(playerId);
-        gameState.setPublicMessage(actor.getUsername() + " publicly activated Chen's ability. Player "
-                + victim.getUserId() + " will be kicked during tonight's settlement.");
+        String publicFallback = actor.getUsername() + " publicly activated Chen's ability. Player "
+                + victim.getUserId() + " will be kicked during tonight's settlement.";
+        gameState.setPublicMessage(MessagePayload.of("backend.chen.publicActivated",
+                Map.of("actor", actor.getUsername(), "targetId", victim.getUserId()), publicFallback));
         gameStore.saveGame(gameState);
         return "Chen action: player " + victim.getUserId() + " will be kicked during tonight's settlement.";
     }
@@ -252,15 +255,15 @@ public class DayService {
     public String skipChenAction(String roomId, Long playerId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.DAY_START) {
-            throw new IllegalStateException("Chen can only skip during the day discussion phase.");
+            throw localized("backend.chen.skipOnlyDayDiscussion", "Chen can only skip during the day discussion phase.");
         }
 
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.CHEN);
         if (gameState.getChenUsedPlayerIds() != null && gameState.getChenUsedPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Chen has already used this action.");
+            throw localized("backend.chen.alreadyUsed", "Chen has already used this action.");
         }
 
         if (gameState.getChenSkippedRounds() != null) {
@@ -296,22 +299,24 @@ public class DayService {
             gameState.setNominatedPlayerId(null);
             gameState.setLastExiledPlayerId(null);
             gameState.setLastVoteResult(isTie
-                    ? "Nomination tied. No player entered the execution vote."
-                    : "No nominations were cast.");
+                    ? MessagePayload.of("backend.day.nominationTie", "Nomination tied. No player entered the execution vote.")
+                    : MessagePayload.of("backend.day.noNominations", "No nominations were cast."));
             finishDayWithoutExecution(gameState);
             return;
         }
 
         gameHelper.getAlivePlayer(gameState, topPlayerId);
         gameState.setNominatedPlayerId(topPlayerId);
-        gameState.setLastVoteResult("Player " + topPlayerId + " won the nomination with " + topVotes + " votes.");
+        gameState.setLastVoteResult(MessagePayload.of("backend.day.nominationWinner",
+                Map.of("playerId", topPlayerId, "votes", topVotes),
+                "Player " + topPlayerId + " won the nomination with " + topVotes + " votes."));
         gameState.setCurrentPhase(GamePhase.VOTING);
     }
 
     private void tallyExecutionVote(GameState gameState) {
         Long nominatedPlayerId = gameState.getNominatedPlayerId();
         if (nominatedPlayerId == null) {
-            throw new IllegalStateException("No nominated player is available for the execution vote.");
+            throw localized("backend.day.noNomineeForExecution", "No nominated player is available for the execution vote.");
         }
 
         rememberDayVoters(gameState);
@@ -329,7 +334,9 @@ public class DayService {
             gameState.setLastExiledPlayerId(nominatedPlayerId);
 
             if (executedPlayer.getRole() == Role.NUKO && !executedPlayer.isAlive()) {
-                gameState.setLastVoteResult("Player " + nominatedPlayerId + " was exiled with " + yesVotes + "/" + majority + " required yes votes.");
+                gameState.setLastVoteResult(MessagePayload.of("backend.day.exiled",
+                        Map.of("playerId", nominatedPlayerId, "votes", yesVotes, "majority", majority),
+                        "Player " + nominatedPlayerId + " was exiled with " + yesVotes + "/" + majority + " required yes votes."));
                 gameState.setCurrentPhase(GamePhase.GAME_OVER);
                 gameState.setStatus(RoomStatus.FINISHED);
                 clearDayVotingState(gameState);
@@ -339,14 +346,18 @@ public class DayService {
 
             clearDayVotingState(gameState);
             gameState.getFinalVoteEligiblePlayerIds().clear();
-            gameState.setLastVoteResult("Player " + nominatedPlayerId + " was exiled with " + yesVotes + "/" + majority + " required yes votes.");
+            gameState.setLastVoteResult(MessagePayload.of("backend.day.exiled",
+                    Map.of("playerId", nominatedPlayerId, "votes", yesVotes, "majority", majority),
+                    "Player " + nominatedPlayerId + " was exiled with " + yesVotes + "/" + majority + " required yes votes."));
             checkWinCondition(gameState);
             return;
         }
 
         gameState.setLastExiledPlayerId(null);
         clearDayVotingState(gameState);
-        gameState.setLastVoteResult("Execution failed: player " + nominatedPlayerId + " received " + yesVotes + "/" + majority + " required yes votes.");
+        gameState.setLastVoteResult(MessagePayload.of("backend.day.executionFailed",
+                Map.of("playerId", nominatedPlayerId, "votes", yesVotes, "majority", majority),
+                "Execution failed: player " + nominatedPlayerId + " received " + yesVotes + "/" + majority + " required yes votes."));
         finishDayWithoutExecution(gameState);
     }
 
@@ -449,24 +460,24 @@ public class DayService {
     public String saltedFishStab(String roomId, Long playerId, Long targetId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.VOTING) {
-            throw new IllegalStateException("Salted Fish can only stab during the execution voting phase.");
+            throw localized("backend.saltedFish.stabOnlyExecutionVoting", "Salted Fish can only stab during the execution voting phase.");
         }
 
         PlayerState actor = gameHelper.getPlayer(gameState, playerId);
         if (!actor.isAlive() && !gameState.getFatcatKilledPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Salted Fish can only act after being removed by Fatcat.");
+            throw localized("backend.saltedFish.onlyAfterFatcatRemoved", "Salted Fish can only act after being removed by Fatcat.");
         }
         if (!gameHelper.canActAs(gameState, actor, Role.SALTED_FISH)) {
-            throw new IllegalArgumentException("Only Salted Fish can use this action.");
+            throw localized("backend.saltedFish.onlyRoleCanUse", "Only Salted Fish can use this action.");
         }
         if (gameState.getSaltedFishUsedPlayerIds() != null && gameState.getSaltedFishUsedPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Salted Fish has already used this action.");
+            throw localized("backend.saltedFish.alreadyUsed", "Salted Fish has already used this action.");
         }
         if (playerId.equals(targetId)) {
-            throw new IllegalArgumentException("Salted Fish cannot stab himself.");
+            throw localized("backend.saltedFish.cannotStabSelf", "Salted Fish cannot stab himself.");
         }
 
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
@@ -474,11 +485,13 @@ public class DayService {
             gameState.getSaltedFishUsedPlayerIds().add(playerId);
         }
         String publicMessage = actor.getUsername() + " used Salted Fish Stab on " + target.getUsername() + ".";
+        String publicMessageKey;
         boolean deathOccurred = false;
 
         if (gameHelper.isDrunk(gameState, playerId)) {
             publicMessage += " The action had no effect.";
-            gameState.setPublicMessage(publicMessage);
+            gameState.setPublicMessage(MessagePayload.of("backend.saltedFish.drunkNoEffect",
+                    Map.of("actor", actor.getUsername(), "target", target.getUsername()), publicMessage));
             gameStore.saveGame(gameState);
             return publicMessage;
         }
@@ -500,16 +513,20 @@ public class DayService {
                     gameState.getFatcatKillBlockedPlayerIds().add(targetId);
                 }
                 publicMessage += " Pink Rabbit protected Fatcat and was removed. Fatcat will lose the next night kill.";
+                publicMessageKey = "backend.saltedFish.pinkRabbit";
             } else {
                 gameHelper.setDead(gameState, targetId);
                 deathOccurred = true;
                 publicMessage += " The target was Fatcat and was removed.";
+                publicMessageKey = "backend.saltedFish.fatcatRemoved";
             }
         } else {
             publicMessage += " The target was not Fatcat. Nothing happened.";
+            publicMessageKey = "backend.saltedFish.notFatcat";
         }
 
-        gameState.setPublicMessage(publicMessage);
+        gameState.setPublicMessage(MessagePayload.of(publicMessageKey,
+                Map.of("actor", actor.getUsername(), "target", target.getUsername()), publicMessage));
         if (deathOccurred && gameState.getCurrentPhase() != GamePhase.GAME_OVER) {
             checkWinCondition(gameState);
         }
@@ -520,21 +537,21 @@ public class DayService {
     public String skipSaltedFishStab(String roomId, Long playerId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentPhase() != GamePhase.VOTING) {
-            throw new IllegalStateException("Salted Fish can only skip during the execution voting phase.");
+            throw localized("backend.saltedFish.skipOnlyExecutionVoting", "Salted Fish can only skip during the execution voting phase.");
         }
 
         PlayerState actor = gameHelper.getPlayer(gameState, playerId);
         if (!actor.isAlive() && !gameState.getFatcatKilledPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Salted Fish can only act after being removed by Fatcat.");
+            throw localized("backend.saltedFish.onlyAfterFatcatRemoved", "Salted Fish can only act after being removed by Fatcat.");
         }
         if (!gameHelper.canActAs(gameState, actor, Role.SALTED_FISH)) {
-            throw new IllegalArgumentException("Only Salted Fish can skip this action.");
+            throw localized("backend.saltedFish.onlyRoleCanSkip", "Only Salted Fish can skip this action.");
         }
         if (gameState.getSaltedFishUsedPlayerIds() != null && gameState.getSaltedFishUsedPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Salted Fish has already used this action.");
+            throw localized("backend.saltedFish.alreadyUsed", "Salted Fish has already used this action.");
         }
 
         if (gameState.getSaltedFishSkippedRounds() != null) {
@@ -543,4 +560,14 @@ public class DayService {
         gameStore.saveGame(gameState);
         return "Salted Fish stab skipped for this vote.";
     }
+
+
+    private LocalizedGameException localized(String key, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, fallback));
+    }
 }
+
+
+
+
+

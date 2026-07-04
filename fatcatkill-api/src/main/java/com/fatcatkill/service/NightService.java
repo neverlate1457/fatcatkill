@@ -4,6 +4,7 @@ import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.store.GameStore;
 import org.springframework.stereotype.Service;
@@ -163,16 +164,16 @@ public class NightService {
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
 
         if (actor.getUserId().equals(target.getUserId())) {
-            throw new IllegalArgumentException("Str cannot swap with self.");
+            throw localized("backend.night.strCannotSwapSelf", "Str cannot swap with self.");
         }
         Integer actorSeat = gameHelper.getEffectiveSeatNumber(gameState, actor);
         Integer targetSeat = gameHelper.getEffectiveSeatNumber(gameState, target);
         if (actorSeat == null || targetSeat == null) {
-            throw new IllegalStateException("Both players must have seat numbers.");
+            throw localized("backend.night.bothPlayersNeedSeats", "Both players must have seat numbers.");
         }
         if (gameState.getStrSwappedSeatNumbers().contains(actorSeat)
                 || gameState.getStrSwappedSeatNumbers().contains(targetSeat)) {
-            throw new IllegalStateException("A swapped seat number cannot be swapped again tonight.");
+            throw localized("backend.night.seatAlreadySwapped", "A swapped seat number cannot be swapped again tonight.");
         }
 
         gameState.getStrTemporarySeatNumbers().put(actor.getUserId(), targetSeat);
@@ -196,10 +197,10 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.NIGHT_START);
         PlayerState actor = gameHelper.validateAlive(gameState, playerId);
         if (!gameHelper.canUseFatcatKill(gameState, actor)) {
-            throw new IllegalArgumentException("This player cannot use Fatcat kill right now.");
+            throw localized("backend.night.fatcatKillNotAllowed", "This player cannot use Fatcat kill right now.");
         }
         if (gameState.getCurrentRound() == 1) {
-            throw new IllegalStateException("Fatcat cannot kill on the first night.");
+            throw localized("backend.night.fatcatCannotKillFirstNight", "Fatcat cannot kill on the first night.");
         }
         if (gameState.getFatcatKillBlockedPlayerIds() != null
                 && gameState.getFatcatKillBlockedPlayerIds().remove(playerId)) {
@@ -221,15 +222,15 @@ public class NightService {
     public String fatcatTeamHint(String roomId, Long playerId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentRound() != 1 || !isNightPhase(gameState.getCurrentPhase())) {
-            throw new IllegalStateException("Team hint is only available during the first night.");
+            throw localized("backend.night.teamHintFirstNightOnly", "Team hint is only available during the first night.");
         }
 
         PlayerState actor = gameHelper.validateAlive(gameState, playerId);
         if (actor.getRole() != Role.FATCAT && !gameHelper.isFatcatHorcrux(actor.getRole())) {
-            throw new IllegalArgumentException("Only Fatcat and Fatcat horcruxes can use this hint.");
+            throw localized("backend.night.teamHintOnlyFatcatSide", "Only Fatcat and Fatcat horcruxes can use this hint.");
         }
 
         String hint = actor.getRole() == Role.FATCAT
@@ -249,7 +250,7 @@ public class NightService {
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.PH_SERVICE);
 
         if (targetRole == null || !gameHelper.isVolunteerArmy(targetRole)) {
-            throw new IllegalArgumentException("PH Service must choose a volunteer-army role.");
+            throw localized("backend.night.phServiceVolunteerRoleOnly", "PH Service must choose a volunteer-army role.");
         }
         boolean rolePresent = gameState.getPlayers().stream()
                 .anyMatch(player -> player.getRole() == targetRole);
@@ -269,14 +270,15 @@ public class NightService {
     public String emperorRevealAction(String roomId, Long playerId) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("Game is not active.");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         if (gameState.getCurrentRound() != 1 || !isNightPhase(gameState.getCurrentPhase())) {
-            throw new IllegalStateException("Emperor reveal is only available during the first night.");
+            throw localized("backend.night.emperorFirstNightOnly", "Emperor reveal is only available during the first night.");
         }
 
         gameHelper.validateAndGetPlayer(gameState, playerId, Role.EMPEROR);
         gameState.getPlayers().forEach(player -> gameHelper.rememberRatManChecker(gameState, playerId, player));
+        gameStore.saveGame(gameState);
         return gameHelper.isAbilityDisabled(gameState, playerId)
                 ? buildScrambledAllRolesHint(gameState)
                 : buildAllRolesHint(gameState);
@@ -307,11 +309,11 @@ public class NightService {
             return;
         }
         if (playerId.equals(targetId)) {
-            throw new IllegalArgumentException("Can Man cannot drink with himself.");
+            throw localized("backend.night.canManCannotDrinkSelf", "Can Man cannot drink with himself.");
         }
         targetId = redirectToXiaoenIfNeeded(gameState, playerId, targetId);
         if (playerId.equals(targetId)) {
-            throw new IllegalArgumentException("Can Man cannot drink with himself.");
+            throw localized("backend.night.canManCannotDrinkSelf", "Can Man cannot drink with himself.");
         }
         PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
 
@@ -327,7 +329,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.NANGONG_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.NANGONG);
         if (gameState.getNangongUsedPlayerIds().contains(playerId)) {
-            throw new IllegalStateException("Nangong has already used this action.");
+            throw localized("backend.night.nangongAlreadyUsed", "Nangong has already used this action.");
         }
         gameState.getNangongUsedPlayerIds().add(playerId);
         if (gameHelper.isAbilityDisabled(gameState, playerId)) {
@@ -408,7 +410,7 @@ public class NightService {
         GameState gameState = gameHelper.validateAndGetGame(roomId, GamePhase.HATONG_ACTION);
         gameHelper.validateAndGetEffectivePlayer(gameState, playerId, Role.HATONG);
         if (!gameState.getLastDayVoterIds().contains(playerId)) {
-            throw new IllegalStateException("Hatong must have voted on the previous day.");
+            throw localized("backend.night.hatongMustHaveVoted", "Hatong must have voted on the previous day.");
         }
 
         boolean fatcatVoted = !gameHelper.isAbilityDisabled(gameState, playerId) && gameHelper.hasFatcatVotedYesterday(gameState);
@@ -445,7 +447,7 @@ public class NightService {
                 .distinct()
                 .toList();
         if (targets.size() > 3) {
-            throw new IllegalArgumentException("Mubaimu can share tarts with at most 3 players.");
+            throw localized("backend.night.mubaimuMaxThreeTargets", "Mubaimu can share tarts with at most 3 players.");
         }
 
         boolean fedFatcatFaction = false;
@@ -453,7 +455,7 @@ public class NightService {
             targetId = redirectToXiaoenIfNeeded(gameState, playerId, targetId);
             PlayerState target = gameHelper.getAlivePlayer(gameState, targetId);
             if (target.getUserId().equals(playerId)) {
-                throw new IllegalArgumentException("Mubaimu cannot give a tart to self.");
+                throw localized("backend.night.mubaimuCannotTargetSelf", "Mubaimu cannot give a tart to self.");
             }
             if (gameHelper.markBarkKingNoShowIfNeeded(gameState, target)) {
                 continue;
@@ -485,13 +487,13 @@ public class NightService {
         }
 
         if (targetId1 == null || targetId2 == null) {
-            throw new IllegalArgumentException("Shushu must choose two travel companions.");
+            throw localized("backend.night.shushuNeedsTwoCompanions", "Shushu must choose two travel companions.");
         }
         if (targetId1.equals(targetId2)) {
-            throw new IllegalArgumentException("Shushu must choose two different companions.");
+            throw localized("backend.night.shushuNeedsDifferentCompanions", "Shushu must choose two different companions.");
         }
         if (targetId1.equals(playerId) || targetId2.equals(playerId)) {
-            throw new IllegalArgumentException("Shushu cannot travel with self.");
+            throw localized("backend.night.shushuCannotTargetSelf", "Shushu cannot travel with self.");
         }
 
         targetId1 = redirectToXiaoenIfNeeded(gameState, playerId, targetId1);
@@ -523,9 +525,13 @@ public class NightService {
         String message = "Shushu travel: player " + first.getUserId() + " sees player " + second.getUserId()
                 + ", and player " + second.getUserId() + " sees player " + first.getUserId() + ".";
         gameState.getPrivateMessages().put(first.getUserId(),
-                "Your travel companion is player " + second.getUserId() + " (" + second.getUsername() + ").");
+                MessagePayload.of("backend.night.shushuCompanion",
+                        Map.of("playerId", second.getUserId(), "username", second.getUsername()),
+                        "Your travel companion is player " + second.getUserId() + " (" + second.getUsername() + ")."));
         gameState.getPrivateMessages().put(second.getUserId(),
-                "Your travel companion is player " + first.getUserId() + " (" + first.getUsername() + ").");
+                MessagePayload.of("backend.night.shushuCompanion",
+                        Map.of("playerId", first.getUserId(), "username", first.getUsername()),
+                        "Your travel companion is player " + first.getUserId() + " (" + first.getUsername() + ")."));
         gameStore.saveGame(gameState);
         return sameDisplayedFaction
                 ? message + " They displayed as the same faction, so Shushu was killed in the morning."
@@ -551,15 +557,16 @@ public class NightService {
                         && gameState.getCurrentRound() >= 2))
                 .toList();
 
-        moveToNextPhase(gameState);
-        gameStore.saveGame(gameState);
-
         if (horcruxes.isEmpty()) {
+            moveToNextPhase(gameState);
+            gameStore.saveGame(gameState);
             return "Grass Bean check: no alive Fatcat horcrux was found.";
         }
 
         PlayerState target = horcruxes.get(random.nextInt(horcruxes.size()));
         gameHelper.rememberRatManChecker(gameState, playerId, target);
+        moveToNextPhase(gameState);
+        gameStore.saveGame(gameState);
         return "Grass Bean check: player " + target.getUserId() + " is a Fatcat horcrux.";
     }
 
@@ -605,7 +612,7 @@ public class NightService {
 
         Integer actorSeat = gameHelper.getEffectiveSeatNumber(gameState, actor);
         if (actorSeat == null) {
-            throw new IllegalStateException("Xiangxiang must have a seat number.");
+            throw localized("backend.night.xiangxiangNeedsSeat", "Xiangxiang must have a seat number.");
         }
         int count = gameHelper.isAbilityDisabled(gameState, playerId) ? 0 : gameHelper.countAdjacentFatcats(gameState, actorSeat);
         moveToNextPhase(gameState);
@@ -643,7 +650,7 @@ public class NightService {
 
         Long pendingPlayerId = gameState.getMochiBossPendingCheckPlayerId();
         if (pendingPlayerId == null || !pendingPlayerId.equals(playerId)) {
-            throw new IllegalStateException("Mochi Boss has no pending Fatcat check.");
+            throw localized("backend.night.mochiNoPendingCheck", "Mochi Boss has no pending Fatcat check.");
         }
 
         targetId = redirectToXiaoenIfNeeded(gameState, playerId, targetId);
@@ -928,5 +935,10 @@ public class NightService {
 
     private String translateRole(Role role) {
         return role == null ? "未知角色" : role.getDisplayName();
+    }
+
+
+    private LocalizedGameException localized(String key, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, fallback));
     }
 }

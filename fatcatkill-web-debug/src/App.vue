@@ -1,11 +1,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { socket } from './socket'
+import { resolveBrowserServiceUrl } from './serviceUrl'
 import { roleTranslations, translateRole } from './roleTranslations'
 
 const STORAGE_KEY = 'fatcatkill.session'
 const CLIENT_ID_KEY = 'fatcatkill.clientId'
 const HOST_DECKS_KEY = 'fatcatkill.hostDecks'
+const AUTH_KEY = 'fatcatkill.authUser'
+const GATEWAY_URL = resolveBrowserServiceUrl(import.meta.env.VITE_GATEWAY_URL)
 const clientId = (() => {
   const saved = window.localStorage.getItem(CLIENT_ID_KEY)
   if (saved) return saved
@@ -13,6 +16,15 @@ const clientId = (() => {
   window.localStorage.setItem(CLIENT_ID_KEY, created)
   return created
 })()
+
+
+const loadSavedAuthUser = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(AUTH_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
 
 const loadSavedSession = () => {
   try {
@@ -23,6 +35,10 @@ const loadSavedSession = () => {
 }
 
 const savedSession = loadSavedSession()
+const authUser = ref(loadSavedAuthUser())
+const authUsername = ref(authUser.value?.username || '')
+const authPassword = ref('')
+const authMode = ref('login')
 
 const roomId = ref(savedSession.roomId || '')
 const userId = ref(savedSession.userId || '')
@@ -34,6 +50,8 @@ const gameState = ref(null)
 const actionError = ref('')
 const showRoomList = ref(false)
 const connectedRooms = ref([])
+const historyRecords = ref([])
+const historyLoading = ref(false)
 const revealPlayers = ref([])
 const methaneSelection = ref([])
 const mubaimuSelection = ref([])
@@ -184,7 +202,8 @@ const nightPhases = new Set([
   'SEER_VERIFY'
 ])
 
-const displayName = computed(() => nickname.value.trim() || (userId.value ? `Player ${userId.value}` : 'Guest'))
+const displayName = computed(() => nickname.value.trim() || authUser.value?.username || (userId.value ? `Player ${userId.value}` : 'Guest'))
+const isLoggedIn = computed(() => Boolean(authUser.value?.id))
 
 const saveSession = () => {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -223,12 +242,26 @@ watch(roomSize, (size) => { if (hostMode.value && customDeck.value.length !== Nu
 
 const errorMessage = (error, fallback = 'Action failed.') => {
   const data = error?.response?.data
+  if (typeof error === 'string') return error || fallback
   if (typeof data === 'string') return data
   if (data?.message) return data.message
   if (data?.error && data?.path) return `${data.error}: ${data.path}`
   if (data?.error) return data.error
   if (data) return JSON.stringify(data)
   return error?.message || fallback
+}
+
+let lastActionErrorPopup = { message: '', time: 0 }
+const showActionError = (error, fallback = 'Action failed.') => {
+  const message = errorMessage(error, fallback)
+  actionError.value = message
+  if (message) {
+    const now = Date.now()
+    const isDuplicate = lastActionErrorPopup.message === message && now - lastActionErrorPopup.time < 800
+    if (!isDuplicate) window.alert(message)
+    lastActionErrorPopup = { message, time: now }
+  }
+  return message
 }
 
 const ensureSocketConnected = () => {
@@ -247,9 +280,9 @@ const joinSocketRoom = async ({ force = false } = {}) => {
     const timer = window.setTimeout(() => reject(new Error('Join room timeout.')), 10000)
     socket.emit('joinRoom', {
       roomId: roomId.value,
-      userId: Number(userId.value),
+      userId: userId.value ? Number(userId.value) : null,
       clientId,
-      nickname: displayName.value,
+      nickname: nickname.value.trim(),
       roomSize: Number(roomSize.value),
       spectator: hostMode.value
     }, (response) => {
@@ -270,6 +303,8 @@ const requestRoomList = async () => {
     socket.emit('listRooms', (response) => {
       if (response?.ok) {
         connectedRooms.value = response.rooms || []
+      } else if (response?.error) {
+        showActionError(response.error, 'Failed to load room list.')
       }
       resolve(response)
     })
@@ -277,23 +312,123 @@ const requestRoomList = async () => {
 }
 
 const openRoomList = async () => {
+  if (!requireLogin()) return
   showRoomList.value = true
   actionError.value = ''
   await requestRoomList()
 }
 
+const loadGameHistory = async () => {
+  if (!isLoggedIn.value) return
+  historyLoading.value = true
+  try {
+    const response = await fetch(`${GATEWAY_URL}/history`)
+    const data = await response.json().catch(() => [])
+    if (!response.ok) throw new Error(data.message || 'Failed to load game history.')
+    historyRecords.value = Array.isArray(data) ? data : []
+    actionError.value = ''
+  } catch (error) {
+    showActionError(error, 'Failed to load game history.')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const historyWinnerText = (winnerCamp) => {
+  if (winnerCamp === 'WOLF') return '????'
+  if (winnerCamp === 'VILLAGER') return '?????'
+  return winnerCamp || '??'
+}
+
+const historyTimeText = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+const downloadHistoryRecord = async (record) => {
+  try {
+    const response = await fetch(`${GATEWAY_URL}/history/${encodeURIComponent(record.gameId)}`)
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || 'Failed to download game history.')
+    const parsedState = typeof data.finalState === 'string' ? JSON.parse(data.finalState) : data.finalState
+    const payload = { ...data.summary, finalState: parsedState }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `fatcatkill_history_${record.roomId}_${record.gameId}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    actionError.value = ''
+  } catch (error) {
+    showActionError(error, 'Failed to download game history.')
+  }
+}
+
+
+const saveAuthUser = (user) => {
+  authUser.value = user
+  window.localStorage.setItem(AUTH_KEY, JSON.stringify(user))
+  if (!nickname.value.trim()) nickname.value = user.username
+  loadGameHistory()
+}
+
+const submitAuth = async () => {
+  try {
+    const endpoint = authMode.value === 'register' ? '/auth/register' : '/auth/login'
+    const response = await fetch(`${GATEWAY_URL}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: authUsername.value.trim(), password: authPassword.value })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || 'Login failed.')
+    saveAuthUser(data)
+    authPassword.value = ''
+    actionError.value = ''
+  } catch (error) {
+    showActionError(error, authMode.value === 'register' ? 'Registration failed.' : 'Login failed.')
+  }
+}
+
+const logoutAuth = () => {
+  authUser.value = null
+  authPassword.value = ''
+  window.localStorage.removeItem(AUTH_KEY)
+}
+
+const loginAsGuest = () => {
+  const suffix = clientId.slice(0, 5).toUpperCase()
+  const guest = {
+    id: `guest-${clientId}`,
+    username: `Guest ${suffix}`,
+    gamesPlayed: 0,
+    gamesWon: 0,
+    guest: true
+  }
+  saveAuthUser(guest)
+  authUsername.value = guest.username
+  authPassword.value = ''
+  actionError.value = ''
+}
+
+const requireLogin = () => {
+  if (isLoggedIn.value) return true
+  showActionError('Please login before creating or joining a room.')
+  return false
+}
+
 const createHostedRoom = async () => {
+  if (!requireLogin()) return
   hostMode.value = true
   if (!roomId.value) roomId.value = String(Math.floor(1000 + Math.random() * 9000))
   await joinRoom()
 }
 
 const createRoom = async () => {
+  if (!requireLogin()) return
   hostMode.value = false
-  if (!userId.value) {
-    alert('Please enter player ID.')
-    return
-  }
   if (!roomId.value) {
     roomId.value = String(Math.floor(1000 + Math.random() * 9000))
   }
@@ -309,13 +444,15 @@ const selectRoom = async (selectedRoomId) => {
 }
 
 const joinRoom = async () => {
-  if (!userId.value || !roomId.value) {
-    alert('Please enter player ID and room ID.')
+  if (!requireLogin()) return
+  if (!roomId.value) {
+    showActionError('Please enter room ID.')
     return
   }
 
   try {
-    await joinSocketRoom({ force: true })
+    const joinResponse = await joinSocketRoom({ force: true })
+    if (joinResponse?.userId != null) userId.value = String(joinResponse.userId)
     isConnected.value = true
     showRoomList.value = false
     actionError.value = ''
@@ -324,7 +461,7 @@ const joinRoom = async () => {
     await fetchRoomState()
   } catch (error) {
     isConnected.value = false
-    actionError.value = error.message || 'Failed to join room.'
+    showActionError(error, 'Failed to join room.')
   }
 }
 
@@ -346,8 +483,23 @@ onMounted(() => {
     connectedRooms.value = rooms || []
   })
 
+  if (isLoggedIn.value) loadGameHistory()
+
+  socket.on('roomIdentityUpdate', (identity) => {
+    if (identity?.roomId && String(identity.roomId) === String(roomId.value) && identity.userId != null) {
+      userId.value = String(identity.userId)
+      hostMode.value = identity.spectator === true
+      saveSession()
+    }
+  })
+
+  socket.on('kickedFromRoom', (payload) => {
+    resetToMain()
+    serverMessage.value = payload?.message || 'You were kicked from the room.'
+  })
+
   socket.on('actionError', (errorMsg) => {
-    actionError.value = typeof errorMsg === 'string' ? errorMsg : 'Action failed.'
+    showActionError(typeof errorMsg === 'string' ? errorMsg : 'Action failed.')
   })
 
   socket.on('roomClosed', () => {
@@ -355,7 +507,7 @@ onMounted(() => {
     serverMessage.value = 'Room closed.'
   })
 
-  if (roomId.value && userId.value) {
+  if (roomId.value) {
     joinRoom()
   }
 })
@@ -417,7 +569,9 @@ const onlineRoomPlayers = computed(() => {
     if (key == null) continue
     playersByKey.set(String(key), {
       userId: player.userId,
-      username: player.nickname || `Player ${player.userId || ''}`.trim()
+      username: player.nickname || `Player ${player.userId || ''}`.trim(),
+      ready: player.ready === true,
+      socketId: player.socketId || null
     })
   }
 
@@ -425,7 +579,9 @@ const onlineRoomPlayers = computed(() => {
   if (!hostMode.value && Number.isFinite(currentUserId) && !playersByKey.has(String(currentUserId))) {
     playersByKey.set(String(currentUserId), {
       userId: currentUserId,
-      username: displayName.value
+      username: displayName.value,
+      ready: false,
+      socketId: null
     })
   }
 
@@ -436,9 +592,44 @@ const currentRoomInfo = computed(() => connectedRooms.value.find((room) => room.
 const roomHostId = computed(() => currentRoomInfo.value?.hostId ?? gameState.value?.hostId ?? null)
 const isRoomHost = computed(() => roomHostId.value != null && Number(roomHostId.value) === Number(userId.value))
 const isHostSpectator = computed(() => hostMode.value && isRoomHost.value)
+const isDeadObserver = computed(() => Boolean(gameState.value && gameState.value.status !== 'WAITING' && myPlayer.value && !myPlayer.value.alive))
+const isObserverMode = computed(() => isHostSpectator.value || isDeadObserver.value)
+const observerTitle = computed(() => isDeadObserver.value ? 'Observer mode' : 'Host observer')
+const observerSubtitle = computed(() => isDeadObserver.value ? '你已離場，正在觀戰' : '遊戲監看')
+const currentRoomPlayer = computed(() => onlineRoomPlayers.value.find((player) => Number(player.userId) === Number(userId.value)) || null)
+const isRoomParticipant = computed(() => Boolean(currentRoomPlayer.value) && !hostMode.value)
+const isPlayerReady = computed(() => currentRoomPlayer.value?.ready === true)
 const hostDeckHasHighRabbit = computed(() => customDeck.value.includes('HIGH_RABBIT'))
 const hostDeckHasMethane = computed(() => customDeck.value.includes('METHANE'))
 const availableFatcatHintRoles = computed(() => volunteerRoleOptions.filter((role) => !customDeck.value.includes(role)))
+const selectedFatcatHintRoles = computed(() => fatcatHintRoles.value.filter(Boolean))
+const fatcatHintSlotIndexes = [0, 1, 2]
+const fatcatHintOptionsFor = (slotIndex) => {
+  const currentRole = fatcatHintRoles.value[slotIndex] || ''
+  const selectedElsewhere = new Set(fatcatHintRoles.value.filter((role, index) => role && index !== slotIndex))
+  return availableFatcatHintRoles.value.filter((role) => role === currentRole || !selectedElsewhere.has(role))
+}
+const cleanFatcatHintRoles = () => {
+  const validRoles = new Set(availableFatcatHintRoles.value)
+  const cleaned = []
+  for (const role of fatcatHintRoles.value) {
+    if (role && validRoles.has(role) && !cleaned.includes(role)) cleaned.push(role)
+    if (cleaned.length === 3) break
+  }
+  if (cleaned.join('|') !== fatcatHintRoles.value.filter(Boolean).join('|')) {
+    fatcatHintRoles.value = cleaned
+  }
+}
+const setFatcatHintRole = (slotIndex, role) => {
+  const next = [...fatcatHintRoles.value]
+  if (role) {
+    next[slotIndex] = role
+  } else {
+    next.splice(slotIndex, 1)
+  }
+  fatcatHintRoles.value = next
+  cleanFatcatHintRoles()
+}
 const highRabbitRoleOptions = computed(() => [...new Set(customDeck.value.filter((role) => role && role !== 'HIGH_RABBIT'))])
 const hostAdvancedSummary = computed(() => {
   const summary = []
@@ -452,20 +643,41 @@ const deckValidation = computed(() => {
   if (customDeck.value.length !== Number(roomSize.value) || customDeck.value.some((role) => !role)) return 'Fill every deck slot.'
   if (new Set(customDeck.value).size !== customDeck.value.length) return 'Roles cannot be duplicated.'
   if (customDeck.value.filter((role) => role === 'FATCAT').length !== 1) return 'Deck must contain exactly one Fatcat.'
-  if (fatcatHintRoles.value.length > 3) return 'Choose at most three absent-role hints.'
+  if (selectedFatcatHintRoles.value.length > 3) return 'Choose at most three absent-role hints.'
+  if (selectedFatcatHintRoles.value.some((role) => !availableFatcatHintRoles.value.includes(role))) return 'Fatcat hints must be absent volunteer roles.'
+  if (new Set(selectedFatcatHintRoles.value).size !== selectedFatcatHintRoles.value.length) return 'Fatcat hints cannot be duplicated.'
   if (hostDeckHasHighRabbit.value && highRabbitRole.value && !highRabbitRoleOptions.value.includes(highRabbitRole.value)) return 'High Rabbit illusion must be a role in this deck.'
   if (hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value && !hostMethaneTargetOptions.value.some((player) => String(player.userId) === String(hostMethaneHallucinationTargetId.value))) return 'Methane hallucination target must be a valid non-Methane non-Fatcat player.'
   return ''
 })
 
+const isBotRoomPlayer = (player) => {
+  const name = player?.username || player?.nickname || ''
+  return name.startsWith('Bot ') || name.startsWith('胖貓測試員_')
+}
+
 const setupRoomPlayers = computed(() => {
   const backendPlayers = gameState.value?.players || []
-  return backendPlayers.length ? backendPlayers : onlineRoomPlayers.value
+  if (!backendPlayers.length) return onlineRoomPlayers.value
+  const onlineReadyById = new Map(onlineRoomPlayers.value.map((player) => [Number(player.userId), player.ready === true]))
+  return backendPlayers.map((player) => ({
+    ...player,
+    ready: isBotRoomPlayer(player) || onlineReadyById.get(Number(player.userId)) === true
+  }))
 })
 
 const hostMethaneTargetOptions = computed(() => setupRoomPlayers.value
   .map((player, index) => ({ ...player, role: customDeck.value[index] }))
   .filter((player) => player.userId != null && player.role && !['FATCAT', 'WEREWOLF', 'METHANE'].includes(player.role)))
+
+watch(customDeck, () => {
+  cleanFatcatHintRoles()
+  if (highRabbitRole.value && !highRabbitRoleOptions.value.includes(highRabbitRole.value)) highRabbitRole.value = ''
+  if (hostMethaneHallucinationTargetId.value && !hostMethaneTargetOptions.value.some((player) => String(player.userId) === String(hostMethaneHallucinationTargetId.value))) {
+    hostMethaneHallucinationTargetId.value = ''
+  }
+}, { deep: true })
+
 
 const roomPlayerCount = computed(() => setupRoomPlayers.value.length)
 const roomCapacity = computed(() => {
@@ -479,26 +691,112 @@ const roomFillPercent = computed(() => {
   return Math.round((roomPlayerCount.value / roomCapacity.value) * 100)
 })
 const roomSeatSlots = computed(() => {
-  const players = setupRoomPlayers.value
-  return Array.from({ length: roomCapacity.value }, (_, index) => ({
-    index: index + 1,
-    player: players[index] || null
-  }))
+  const playersBySeat = new Map(setupRoomPlayers.value
+    .filter((player) => player.userId != null)
+    .map((player) => [Number(player.userId), player]))
+  return Array.from({ length: roomCapacity.value }, (_, index) => {
+    const seatId = index + 1
+    return {
+      index: seatId,
+      player: playersBySeat.get(seatId) || null
+    }
+  })
+})
+
+const readyRequiredPlayers = computed(() => setupRoomPlayers.value.filter((player) => Number(player.userId) !== Number(roomHostId.value)))
+const roomReadyCount = computed(() => readyRequiredPlayers.value.filter((player) => player.ready).length)
+const roomRequiredReadyCount = computed(() => readyRequiredPlayers.value.length)
+const allRoomPlayersReady = computed(() => roomPlayerCount.value > 0 && roomReadyCount.value === roomRequiredReadyCount.value)
+const canStartGame = computed(() => isRoomHost.value && !deckValidation.value && allRoomPlayersReady.value)
+const roomStartStatus = computed(() => {
+  if (!roomPlayerCount.value) return ''
+  if (allRoomPlayersReady.value) return roomRequiredReadyCount.value ? 'All non-host players ready' : 'Host can start'
+  return `${roomReadyCount.value} / ${roomRequiredReadyCount.value} non-host players ready`
 })
 
 const roomOccupancyText = computed(() => {
   return `${roomPlayerCount.value} / ${roomCapacity.value} players`
 })
 
+const emitRoomControl = (eventName, payload = {}) => new Promise((resolve, reject) => {
+  const timer = window.setTimeout(() => reject(new Error('Gateway timeout.')), 10000)
+  socket.emit(eventName, payload, (response) => {
+    window.clearTimeout(timer)
+    if (!response?.ok) {
+      reject(new Error(response?.error || 'Room action failed.'))
+      return
+    }
+    resolve(response)
+  })
+})
+
+const toggleReady = async () => {
+  try {
+    await emitRoomControl('setReady', { ready: !isPlayerReady.value })
+    actionError.value = ''
+    await requestRoomList()
+  } catch (error) {
+    showActionError(error, 'Failed to update ready state.')
+  }
+}
+
+const moveToSeat = async (slot) => {
+  if (slot.player || hostMode.value || gameState.value?.status === 'PLAYING') return
+  try {
+    const response = await emitRoomControl('moveSeat', { seatId: slot.index })
+    if (response?.userId != null) userId.value = String(response.userId)
+    actionError.value = ''
+    await requestRoomList()
+  } catch (error) {
+    showActionError(error, 'Failed to move seat.')
+  }
+}
+
+const kickRoomPlayer = async (player) => {
+  if (!isRoomHost.value || !player || Number(player.userId) === Number(userId.value)) return
+  if (!window.confirm(`Kick ${player.username || `Player ${player.userId}`} from room ${roomId.value}?`)) return
+  try {
+    await emitRoomControl('kickPlayer', { userId: Number(player.userId) })
+    actionError.value = ''
+    await requestRoomList()
+  } catch (error) {
+    showActionError(error, 'Failed to kick player.')
+  }
+}
+
+const handleSeatClick = (slot) => {
+  if (slot.player) {
+    kickRoomPlayer(slot.player)
+    return
+  }
+  moveToSeat(slot)
+}
+
+const seatTitle = (slot) => {
+  if (slot.player) {
+    const readyText = slot.player.ready ? 'Ready' : 'Not ready'
+    return `${slot.player.userId} - ${slot.player.username} (${readyText})`
+  }
+  return isRoomParticipant.value ? `Move to seat ${slot.index}` : `Open slot ${slot.index}`
+}
+
+const seatActionText = (slot) => {
+  if (slot.player) {
+    if (isRoomHost.value && Number(slot.player.userId) !== Number(userId.value)) return 'Kick'
+    return slot.player.ready ? 'Ready' : 'Waiting'
+  }
+  return isRoomParticipant.value ? 'Move here' : 'Open'
+}
 const saveHostDeck = () => {
-  if (deckValidation.value) { actionError.value = deckValidation.value; return }
-  const name = deckName.value.trim(); if (!name) { actionError.value = 'Enter a deck name.'; return }
-  const deck = { name, size: Number(roomSize.value), roles: [...customDeck.value], fatcatHintRoles: [...fatcatHintRoles.value], highRabbitRole: highRabbitRole.value || '', methaneHallucinationTargetId: hostMethaneHallucinationTargetId.value || '' }
+  if (deckValidation.value) { showActionError(deckValidation.value); return }
+  const name = deckName.value.trim(); if (!name) { showActionError('Enter a deck name.'); return }
+  cleanFatcatHintRoles()
+  const deck = { name, size: Number(roomSize.value), roles: [...customDeck.value], fatcatHintRoles: [...selectedFatcatHintRoles.value], highRabbitRole: highRabbitRole.value || '', methaneHallucinationTargetId: hostMethaneHallucinationTargetId.value || '' }
   savedDecks.value = [...savedDecks.value.filter((item) => item.name !== name), deck]
   window.localStorage.setItem(HOST_DECKS_KEY, JSON.stringify(savedDecks.value)); selectedSavedDeck.value = name; actionError.value = ''
 }
 const loadHostDeck = () => { const deck = savedDecks.value.find((item) => item.name === selectedSavedDeck.value); if (!deck) return; roomSize.value = Number(deck.size); customDeck.value = [...deck.roles]; fatcatHintRoles.value = [...(deck.fatcatHintRoles || [])]; highRabbitRole.value = deck.highRabbitRole || ''; hostMethaneHallucinationTargetId.value = deck.methaneHallucinationTargetId || '' }
-const hostStartPayload = () => hostMode.value ? { hostMode: true, customDeck: [...customDeck.value], fatcatHintRoles: fatcatHintRoles.value.length ? [...fatcatHintRoles.value] : null, highRabbitRole: highRabbitRole.value || null, methaneHallucinationTargetId: hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value ? Number(hostMethaneHallucinationTargetId.value) : null } : {}
+const hostStartPayload = () => hostMode.value ? { hostMode: true, customDeck: [...customDeck.value], fatcatHintRoles: selectedFatcatHintRoles.value.length ? [...selectedFatcatHintRoles.value] : null, highRabbitRole: highRabbitRole.value || null, methaneHallucinationTargetId: hostDeckHasMethane.value && hostMethaneHallucinationTargetId.value ? Number(hostMethaneHallucinationTargetId.value) : null } : {}
 
 const voteLogTypes = new Set(['SELECT_NOMINATION', 'SELECT_EXECUTION_VOTE', 'CONFIRM_VOTE', 'CANCEL_VOTE', 'SKIP_VOTE', 'TALLY_VOTES', 'START_NOMINATION'])
 const hostPlayerLabel = (playerId) => {
@@ -747,7 +1045,7 @@ const sendAction = async (endpoint, targetId, actionType = null) => {
     actionError.value = ''
     if (response.message) alert(response.message)
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
@@ -757,7 +1055,7 @@ const fetchRoomState = async () => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = errorMessage(error, 'Failed to load room.')
+    showActionError(error, 'Failed to load room.')
   }
 }
 
@@ -774,7 +1072,7 @@ const sendSkillAction = async (actionType, targetId) => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
@@ -792,7 +1090,7 @@ const sendMethaneAction = async (targetId1, targetId2) => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
@@ -812,13 +1110,13 @@ const sendMubaimuAction = async () => {
     mubaimuSelection.value = []
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
 const sendShushuAction = async () => {
   if (shushuSelection.value.length !== 2) {
-    actionError.value = 'Choose exactly 2 companions.'
+    showActionError('Choose exactly 2 companions.')
     return
   }
 
@@ -836,7 +1134,7 @@ const sendShushuAction = async () => {
     shushuSelection.value = []
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
@@ -853,7 +1151,7 @@ const sendPhServiceAction = async () => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Action failed.'
+    showActionError(error, 'Action failed.')
   }
 }
 
@@ -904,6 +1202,7 @@ const activeRoleAssignments = () => {
 const startGame = async () => {
   try {
     if (deckValidation.value) throw new Error(deckValidation.value)
+    if (!allRoomPlayersReady.value) throw new Error('All non-host players must be ready before starting.')
     const response = await emitGameAction(`/room/start/${roomId.value}?mode=${selectedMode.value}`, {
       roomId: roomId.value,
       playerId: Number(userId.value),
@@ -914,7 +1213,7 @@ const startGame = async () => {
     actionError.value = ''
     if (response.message) alert(response.message)
   } catch (error) {
-    actionError.value = error.message || 'Failed to start game.'
+    showActionError(error, 'Failed to start game.')
   }
 }
 const currentRoomPlayers = () => {
@@ -931,35 +1230,12 @@ const currentRoomPlayers = () => {
   if (!hostMode.value && Number.isFinite(currentUserId) && !players.some((player) => player.userId === currentUserId)) {
     players.push({
       userId: currentUserId,
-      nickname: displayName.value,
+      nickname: nickname.value.trim(),
         roomSize: Number(roomSize.value)
     })
   }
 
   return players
-}
-
-const fillBotsAndStartGame = async () => {
-  try {
-    const fillResponse = await emitGameAction(`/room/fill-bots/${roomId.value}?count=${roomSize.value}`, {
-      roomId: roomId.value,
-      playerId: Number(userId.value),
-      hostMode: hostMode.value,
-      players: currentRoomPlayers()
-    })
-    gameState.value = fillResponse.gameState
-
-    const startResponse = await emitGameAction(`/room/start/${roomId.value}?mode=${selectedMode.value}`, {
-      roomId: roomId.value,
-      playerId: Number(userId.value),
-      roleAssignments: activeRoleAssignments(),
-      ...hostStartPayload()
-    })
-    gameState.value = startResponse.gameState
-    actionError.value = ''
-  } catch (error) {
-    actionError.value = error.message || 'Failed to fill bots and start game.'
-  }
 }
 
 const fillBotsOnly = async () => {
@@ -974,7 +1250,7 @@ const fillBotsOnly = async () => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Failed to fill bots.'
+    showActionError(error, 'Failed to fill bots.')
   }
 }
 const fatcatKill = (targetId) => sendSkillAction('FATCAT_KILL', targetId)
@@ -1015,7 +1291,7 @@ const autoPlayBot = async () => {
     gameState.value = response.gameState
     actionError.value = ''
   } catch (error) {
-    actionError.value = error.message || 'Bot action failed.'
+    showActionError(error, 'Bot action failed.')
   }
 }
 
@@ -1034,7 +1310,7 @@ const downloadGameLogs = async () => {
     URL.revokeObjectURL(url)
     actionError.value = ''
   } catch (error) {
-    actionError.value = errorMessage(error, 'Failed to download logs.')
+    showActionError(error, 'Failed to download logs.')
   }
 }
 
@@ -1065,7 +1341,7 @@ const returnToMain = async () => {
         playerId: Number(userId.value)
       }, 'DELETE')
     } catch (error) {
-      actionError.value = error.message || 'Failed to close room.'
+      showActionError(error, 'Failed to close room.')
       return
     }
     resetToMain()
@@ -1099,7 +1375,7 @@ const leaveRoom = async () => {
     resetToMain()
     serverMessage.value = 'Left room.'
   } catch (error) {
-    actionError.value = error.message || 'Failed to leave room.'
+    showActionError(error, 'Failed to leave room.')
   }
 }
 
@@ -1108,7 +1384,7 @@ const fetchReveal = async () => {
     const res = await emitGameAction(`/debug/reveal/${roomId.value}`, {}, 'GET')
     revealPlayers.value = res.data.players || []
   } catch (error) {
-    actionError.value = errorMessage(error)
+    showActionError(error)
   }
 }
 </script>
@@ -1117,6 +1393,33 @@ const fetchReveal = async () => {
   <main :class="['app-shell', { 'night-mode': isNight, 'day-mode': !isNight && gameState }]">
     <section v-if="!isConnected" class="login-panel">
       <h1>FatCatKill</h1>
+      <div class="nickname-card">
+        <span class="eyebrow">Account</span>
+        <strong>{{ authUser ? authUser.username : 'Not logged in' }}</strong>
+        <small v-if="authUser?.guest">Guest session</small>
+        <small v-else-if="authUser">{{ authUser.gamesWon }} / {{ authUser.gamesPlayed }} wins</small>
+      </div>
+      <div v-if="!authUser" class="auth-panel">
+        <div class="auth-tabs">
+          <button type="button" :class="['secondary-button small', { success: authMode === 'login' }]" @click="authMode = 'login'">Login</button>
+          <button type="button" :class="['secondary-button small', { success: authMode === 'register' }]" @click="authMode = 'register'">Register</button>
+        </div>
+        <label class="field">
+          <span>Username</span>
+          <input v-model="authUsername" type="text" autocomplete="username" placeholder="Username" />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input v-model="authPassword" type="password" autocomplete="current-password" placeholder="Password" @keyup.enter="submitAuth" />
+        </label>
+        <div class="auth-actions">
+          <button class="primary-button" @click="submitAuth">{{ authMode === 'register' ? 'Register' : 'Login' }}</button>
+          <button class="secondary-button" @click="loginAsGuest">Guest login</button>
+        </div>
+      </div>
+      <div v-else class="auth-panel compact">
+        <button class="secondary-button" @click="logoutAuth">Logout</button>
+      </div>
       <div class="nickname-card">
         <span class="eyebrow">Display name</span>
         <strong>{{ displayName }}</strong>
@@ -1166,12 +1469,30 @@ const fetchReveal = async () => {
           No online rooms yet. Create one to get started.
         </p>
       </div>
+
+      <div v-if="authUser" class="history-panel">
+        <div class="room-browser-header">
+          <span class="eyebrow">Game history</span>
+          <button class="secondary-button small" :disabled="historyLoading" @click="loadGameHistory">{{ historyLoading ? 'Loading' : 'Refresh' }}</button>
+        </div>
+        <div v-if="historyRecords.length" class="history-list">
+          <article v-for="record in historyRecords" :key="record.gameId" class="history-item">
+            <div>
+              <strong>Room {{ record.roomId }}</strong>
+              <span>{{ historyWinnerText(record.winnerCamp) }}?? ? {{ record.roundsPlayed }} rounds ? {{ record.playerCount }} players</span>
+              <small>{{ historyTimeText(record.endTime) }}</small>
+            </div>
+            <button class="secondary-button small" @click="downloadHistoryRecord(record)">Download</button>
+          </article>
+        </div>
+        <p v-else class="empty-state">No finished games yet.</p>
+      </div>
     </section>
 
     <section v-else class="game-board">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Room {{ roomId }} | {{ isHostSpectator ? 'Host spectator' : `Player ${userId}` }} | {{ displayName }}<span v-if="isRoomHost"> | Host</span></p>
+          <p class="eyebrow">Room {{ roomId }} | {{ isObserverMode ? observerTitle : `Player ${userId}` }} | {{ displayName }}<span v-if="isRoomHost"> | Host</span></p>
           <h1>{{ currentPhaseText }}</h1>
         </div>
         <div class="topbar-actions">
@@ -1202,7 +1523,10 @@ const fetchReveal = async () => {
               <span class="eyebrow">Room occupancy</span>
               <strong>{{ roomOccupancyText }}</strong>
             </div>
-            <button class="secondary-button" @click="fetchRoomState">Refresh</button>
+            <div class="room-ready-actions">
+              <button v-if="isRoomParticipant" class="secondary-button" :class="{ success: isPlayerReady }" @click="toggleReady">{{ isPlayerReady ? 'Cancel ready' : 'Ready' }}</button>
+              <button class="secondary-button" @click="fetchRoomState">Refresh</button>
+            </div>
           </div>
 
           <div class="occupancy-meter" aria-label="Room occupancy">
@@ -1225,15 +1549,20 @@ const fetchReveal = async () => {
           </div>
 
           <div class="seat-map" :style="{ '--seat-count': roomCapacity }">
-            <div
+            <button
               v-for="slot in roomSeatSlots"
               :key="slot.index"
-              :class="['seat-slot', { filled: slot.player, empty: !slot.player }]"
-              :title="slot.player ? `${slot.player.userId} - ${slot.player.username}` : `Open slot ${slot.index}`"
+              type="button"
+              :class="['seat-slot', { filled: slot.player, empty: !slot.player, mine: Number(slot.player?.userId) === Number(userId), clickable: !slot.player && isRoomParticipant }]"
+              :title="seatTitle(slot)"
+              @click="handleSeatClick(slot)"
             >
               <span class="seat-number">{{ slot.index }}</span>
-              <strong>{{ slot.player ? slot.player.username : 'Open' }}</strong>
-            </div>
+              <span class="seat-content">
+                <strong>{{ slot.player ? slot.player.username : 'Open' }}</strong>
+                <small>{{ seatActionText(slot) }}</small>
+              </span>
+            </button>
           </div>
         </div>
 
@@ -1242,6 +1571,7 @@ const fetchReveal = async () => {
           <div class="waiting-list-grid">
             <label v-for="player in setupRoomPlayers" :key="player.userId" class="waiting-player-row">
               <span>{{ player.userId }} - {{ player.username }}<strong v-if="Number(player.userId) === Number(roomHostId)"> (Host)</strong></span>
+              <small :class="['ready-badge', { ready: player.ready }]">{{ player.ready ? 'Ready' : 'Not ready' }}</small>
               <select v-model="testRoleAssignments[player.userId]">
                 <option value="">Random role</option>
                 <option v-for="role in testRoleOptions" :key="role" :value="role">
@@ -1266,21 +1596,33 @@ const fetchReveal = async () => {
         <section v-if="isHostSpectator" class="host-config-panel">
           <div class="host-config-header"><div><span class="eyebrow">Customized game</span><h3>Deck and controlled outcomes</h3></div><select v-model="selectedSavedDeck" @change="loadHostDeck"><option value="">Load saved deck</option><option v-for="deck in savedDecks" :key="deck.name" :value="deck.name">{{ deck.name }}</option></select></div>
           <div class="deck-slot-grid"><label v-for="(_, index) in customDeck" :key="index" class="deck-slot-field"><span>Seat {{ index + 1 }}</span><select v-model="customDeck[index]"><option value="">Choose role</option><option v-for="role in customRoleOptions" :key="role" :value="role">{{ roleName(role) }}</option></select></label></div>
-          <section class="host-advanced-panel"><button class="host-advanced-toggle" type="button" @click="hostAdvancedOpen = !hostAdvancedOpen"><span>Advanced</span><small>{{ hostAdvancedSummary }}</small><strong>{{ hostAdvancedOpen ? '收合' : '展開' }}</strong></button><div v-if="hostAdvancedOpen" class="host-advanced-body"><div class="host-random-grid"><label class="field"><span>肥貓首夜不在場角色情報</span><select v-model="fatcatHintRoles" multiple size="5"><option v-for="role in availableFatcatHintRoles" :key="role" :value="role">{{ roleName(role) }}</option></select></label><label v-if="hostDeckHasHighRabbit" class="field"><span>高能兔幻覺角色</span><select v-model="highRabbitRole"><option value="">隨機場上角色</option><option v-for="role in highRabbitRoleOptions" :key="role" :value="role">{{ roleName(role) }}</option></select></label><div v-else class="host-controlled-note"><span>高能兔幻覺角色</span><strong>牌組未包含高能兔</strong></div><label v-if="hostDeckHasMethane" class="field"><span>甲烷幻覺目標</span><select v-model="hostMethaneHallucinationTargetId"><option value="">隨機合格玩家</option><option v-for="player in hostMethaneTargetOptions" :key="player.userId" :value="String(player.userId)">Seat {{ player.seatNumber || '?' }} · {{ player.username }} · {{ roleName(player.role) }}</option></select></label><div v-else class="host-controlled-note"><span>甲烷幻覺目標</span><strong>牌組未包含甲烷</strong></div></div><div class="host-controlled-note full-row"><span>其他可控要素</span><strong>安弟雲、草盛豆苗稀情報、Guoguo 提示等仍由當下場況自動決定</strong></div></div></section>
+          <section class="host-advanced-panel"><button class="host-advanced-toggle" type="button" @click="hostAdvancedOpen = !hostAdvancedOpen"><span>Advanced</span><small>{{ hostAdvancedSummary }}</small><strong>{{ hostAdvancedOpen ? '收合' : '展開' }}</strong></button><div v-if="hostAdvancedOpen" class="host-advanced-body"><div class="host-random-grid"><div class="field fatcat-hint-picker">
+                  <span>肥貓首夜不在場角色情報</span>
+                  <div class="fatcat-hint-selects">
+                    <label v-for="slotIndex in fatcatHintSlotIndexes" :key="slotIndex" class="mini-field">
+                      <small>提示 {{ slotIndex + 1 }}</small>
+                      <select :value="fatcatHintRoles[slotIndex] || ''" @change="setFatcatHintRole(slotIndex, $event.target.value)">
+                        <option value="">隨機</option>
+                        <option v-for="role in fatcatHintOptionsFor(slotIndex)" :key="role" :value="role">{{ roleName(role) }}</option>
+                      </select>
+                    </label>
+                  </div>
+                </div><label v-if="hostDeckHasHighRabbit" class="field"><span>高能兔幻覺角色</span><select v-model="highRabbitRole"><option value="">隨機場上角色</option><option v-for="role in highRabbitRoleOptions" :key="role" :value="role">{{ roleName(role) }}</option></select></label><div v-else class="host-controlled-note"><span>高能兔幻覺角色</span><strong>牌組未包含高能兔</strong></div><label v-if="hostDeckHasMethane" class="field"><span>甲烷幻覺目標</span><select v-model="hostMethaneHallucinationTargetId"><option value="">隨機合格玩家</option><option v-for="player in hostMethaneTargetOptions" :key="player.userId" :value="String(player.userId)">Seat {{ player.seatNumber || '?' }} · {{ player.username }} · {{ roleName(player.role) }}</option></select></label><div v-else class="host-controlled-note"><span>甲烷幻覺目標</span><strong>牌組未包含甲烷</strong></div></div><div class="host-controlled-note full-row"><span>其他可控要素</span><strong>安弟雲、草盛豆苗稀情報、Guoguo 提示等仍由當下場況自動決定</strong></div></div></section>
           <p v-if="deckValidation" class="validation-text">{{ deckValidation }}</p><div class="save-deck-row"><input v-model="deckName" type="text" placeholder="Deck name" /><button class="secondary-button" @click="saveHostDeck">Save as deck</button></div>
         </section>
 
-        <div v-if="isRoomHost" class="button-row">
-          <button class="primary-button" :disabled="Boolean(deckValidation)" @click="startGame">Start game</button>
-          <button class="secondary-button" @click="fillBotsOnly">Fill bots</button>
-          <button class="action-button" @click="fillBotsAndStartGame">Fill bots and start</button>
-          <button class="secondary-button" @click="createMockRoom">Create test room</button>
+        <p v-if="isRoomHost && roomStartStatus" class="empty-state">{{ roomStartStatus }}</p>
         <p v-if="!isRoomHost" class="empty-state">Waiting for the host to start the game.</p>
+
+        <div v-if="isRoomHost" class="button-row">
+          <button class="primary-button" :disabled="!canStartGame" :title="roomStartStatus" @click="startGame">Start game</button>
+          <button class="secondary-button" @click="fillBotsOnly">Fill bots</button>
+          <button class="secondary-button" @click="createMockRoom">Create test room</button>
         </div>
       </section>
 
-      <section v-if="gameState && isHostSpectator && gameState.status !== 'WAITING'" class="host-observer-panel">
-        <div class="observer-header"><div><span class="eyebrow">Host observer</span><h2>遊戲監看</h2></div><button v-if="gameState.status === 'PLAYING'" class="secondary-button" @click="autoPlayBot">{{ botActionButtonText }}</button></div>
+      <section v-if="gameState && isObserverMode && gameState.status !== 'WAITING'" class="host-observer-panel">
+        <div class="observer-header"><div><span class="eyebrow">{{ observerTitle }}</span><h2>{{ observerSubtitle }}</h2></div><button v-if="isHostSpectator && gameState.status === 'PLAYING'" class="secondary-button" @click="autoPlayBot">{{ botActionButtonText }}</button></div>
         <div class="observer-role-grid">
           <article v-for="player in gameState.players" :key="player.userId" class="observer-player-row"><div><strong>{{ player.seatNumber }} · {{ player.username }}</strong><span>{{ roleName(player.role) }}</span></div><span :class="['observer-status', player.alive ? 'alive' : 'dead']">{{ player.alive ? '存活' : '離場' }}</span></article>
         </div>
@@ -1297,7 +1639,7 @@ const fetchReveal = async () => {
         </section>
       </section>
 
-      <section v-if="gameState && !isHostSpectator" class="status-layout">
+      <section v-if="gameState && !isObserverMode" class="status-layout">
         <div class="self-panel">
           <span class="eyebrow">My status</span>
           <h2>{{ roleName(myDisplayedRole) }}</h2>
@@ -1363,7 +1705,7 @@ const fetchReveal = async () => {
         </div>
       </section>
 
-      <section v-if="gameState" class="players-grid">
+      <section v-if="gameState && !isObserverMode" class="players-grid">
         <article
           v-for="player in gameState.players"
           :key="player.userId"
@@ -1490,7 +1832,7 @@ const fetchReveal = async () => {
         </article>
       </section>
 
-      <section v-if="gameState" class="global-actions">
+      <section v-if="gameState && !isObserverMode" class="global-actions">
         <button v-if="gameState.status === 'PLAYING' && isRoomHost" class="secondary-button" @click="autoPlayBot">
           {{ botActionButtonText }}
         </button>
@@ -1606,6 +1948,18 @@ const fetchReveal = async () => {
   border-radius: 8px;
   box-shadow: 0 14px 35px rgba(21, 31, 45, 0.12);
 }
+
+.auth-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d7e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.auth-panel.compact { align-items: start; }
+.auth-tabs { display: flex; gap: 8px; }
+.auth-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .nickname-card {
   margin-top: 18px;
@@ -1784,6 +2138,28 @@ button:disabled {
 .main-actions .secondary-button {
   margin-top: 0;
 }
+
+.history-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d7e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.history-list { display: grid; gap: 8px; }
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid #d7e0e8;
+  border-radius: 8px;
+  background: #f8fbfd;
+}
+.history-item div { display: grid; gap: 3px; }
+.history-item span, .history-item small { color: #64748b; font-size: 13px; }
 
 .room-browser {
   margin-top: 18px;
@@ -2050,6 +2426,56 @@ button:disabled {
   white-space: nowrap;
 }
 
+
+.room-ready-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary-button.success {
+  color: #ffffff;
+  background: #2f7d5c;
+}
+
+.seat-slot {
+  text-align: left;
+}
+
+.seat-slot.clickable {
+  border-color: rgba(72, 101, 129, 0.55);
+}
+
+.seat-slot.mine {
+  box-shadow: 0 0 0 2px rgba(47, 125, 92, 0.15);
+}
+
+.seat-content {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.seat-content small,
+.ready-badge {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ready-badge.ready {
+  color: #157347;
+}
+
+.night-mode .seat-content small,
+.night-mode .ready-badge {
+  color: #b6c2d1;
+}
+
+.night-mode .ready-badge.ready {
+  color: #77d39d;
+}
 .waiting-list {
   margin-top: 14px;
   padding: 14px;

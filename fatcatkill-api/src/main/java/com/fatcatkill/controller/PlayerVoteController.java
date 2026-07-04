@@ -1,6 +1,7 @@
 package com.fatcatkill.controller;
 
 import com.fatcatkill.dto.GameActionRequest;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.service.DayService;
 import com.fatcatkill.service.GameLogService;
 import com.fatcatkill.store.GameStore;
@@ -8,7 +9,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@CrossOrigin(origins = "*")
 @RequestMapping("/api/day")
 public class PlayerVoteController {
 
@@ -33,7 +33,7 @@ public class PlayerVoteController {
             gameLogService.append(game, request.getPlayerId(), actionType, request.getTargetId(), null, null);
             return ResponseEntity.ok(gameStore.getGame(request.getRoomId()));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -46,7 +46,7 @@ public class PlayerVoteController {
                     "Vote confirmed. Current phase: " + game.getCurrentPhase() + ".");
             return ResponseEntity.ok(gameStore.getGame(request.getRoomId()));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -58,7 +58,7 @@ public class PlayerVoteController {
             gameLogService.append(game, request.getPlayerId(), "CANCEL_VOTE", null, null, null);
             return ResponseEntity.ok(gameStore.getGame(request.getRoomId()));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -71,7 +71,7 @@ public class PlayerVoteController {
                     "Vote skipped. Current phase: " + game.getCurrentPhase() + ".");
             return ResponseEntity.ok(gameStore.getGame(request.getRoomId()));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 }

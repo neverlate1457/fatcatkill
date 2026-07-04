@@ -5,12 +5,12 @@ import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.model.PlayerState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.service.GameLogService;
 import com.fatcatkill.service.NightService;
 import com.fatcatkill.store.GameStore;
 import org.springframework.http.ResponseEntity;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,7 +35,6 @@ import java.util.Set;
 
 @RestController
 @ConditionalOnProperty(name = "fatcatkill.debug-actions", havingValue = "true")
-@CrossOrigin(origins = "*")
 @RequestMapping("/api/debug")
 public class DebugController {
 
@@ -62,13 +61,13 @@ public class DebugController {
                     : null;
 
             GameState game = gameStore.getGame(roomId);
-            if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+            if (game == null) return roomNotFound(roomId);
 
             PlayerState player = game.getPlayers().stream()
                     .filter(x -> x.getUserId().equals(userId))
                     .findFirst()
                     .orElse(null);
-            if (player == null) return ResponseEntity.badRequest().body("Player not found: " + userId);
+            if (player == null) return playerNotFound(userId);
 
             player.setRole(Role.valueOf(roleName));
 
@@ -90,7 +89,7 @@ public class DebugController {
             gameLogService.append(game, userId, "SET_ROLE", null, null, "Debug role set to " + roleName);
             return ResponseEntity.ok(game);
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -100,18 +99,18 @@ public class DebugController {
             String roomId = (String) payload.get("roomId");
             Long playerId = ((Number) payload.get("playerId")).longValue();
             GameState game = gameStore.getGame(roomId);
-            if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+            if (game == null) return roomNotFound(roomId);
 
             PlayerState actor = game.getPlayers().stream()
                     .filter(p -> p.getUserId().equals(playerId))
                     .findFirst()
                     .orElse(null);
-            if (actor == null) return ResponseEntity.badRequest().body("Player not found: " + playerId);
+            if (actor == null) return playerNotFound(playerId);
 
             Long exiledId = game.getLastExiledPlayerId();
             if (exiledId == null) {
                 return ResponseEntity.ok(Map.of(
-                        "message", "AC Cat force check: no last exiled player is recorded.",
+                        "message", MessagePayload.of("backend.debug.acCatNoLastExile", "AC Cat force check: no last exiled player is recorded."),
                         "gameState", game
                 ));
             }
@@ -121,10 +120,10 @@ public class DebugController {
                     .findFirst()
                     .orElse(null);
             String roleName = exiled == null || exiled.getRole() == null ? "UNKNOWN" : exiled.getRole().name();
-            String message = "AC Cat force check: last exiled role is " + roleName + ".";
+            MessagePayload message = MessagePayload.of("backend.debug.acCatLastExiledRole", Map.of("role", roleName), "AC Cat force check: last exiled role is " + roleName + ".");
             return ResponseEntity.ok(Map.of("message", message, "gameState", game));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -134,13 +133,13 @@ public class DebugController {
             String roomId = (String) payload.get("roomId");
             Long playerId = ((Number) payload.get("playerId")).longValue();
             GameState game = gameStore.getGame(roomId);
-            if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+            if (game == null) return roomNotFound(roomId);
 
             PlayerState actor = game.getPlayers().stream()
                     .filter(p -> p.getUserId().equals(playerId))
                     .findFirst()
                     .orElse(null);
-            if (actor == null) return ResponseEntity.badRequest().body("Player not found: " + playerId);
+            if (actor == null) return playerNotFound(playerId);
 
             Map<Integer, PlayerState> seatMap = new HashMap<>();
             for (PlayerState player : game.getPlayers()) {
@@ -150,7 +149,7 @@ public class DebugController {
             }
             if (seatMap.isEmpty()) {
                 return ResponseEntity.ok(Map.of(
-                        "message", "Xiangxiang force check: found 0 adjacent fatcat-side players.",
+                        "message", MessagePayload.of("backend.debug.xiangxiangAdjacentCount", Map.of("count", 0), "Xiangxiang force check: found 0 adjacent fatcat-side players."),
                         "gameState", game
                 ));
             }
@@ -213,17 +212,17 @@ public class DebugController {
             if (left != null && left.getRole() != null && fatRoles.contains(left.getRole())) count++;
             if (right != null && right.getRole() != null && fatRoles.contains(right.getRole())) count++;
 
-            String message = "Xiangxiang force check: found " + count + " adjacent fatcat-side players.";
+            MessagePayload message = MessagePayload.of("backend.debug.xiangxiangAdjacentCount", Map.of("count", count), "Xiangxiang force check: found " + count + " adjacent fatcat-side players.");
             return ResponseEntity.ok(Map.of("message", message, "gameState", game));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
     @GetMapping("/reveal/{roomId}")
     public ResponseEntity<?> revealAll(@PathVariable String roomId) {
         GameState game = gameStore.getGame(roomId);
-        if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+        if (game == null) return roomNotFound(roomId);
 
         var players = game.getPlayers().stream()
                 .map(player -> {
@@ -248,7 +247,7 @@ public class DebugController {
     @GetMapping("/logs/{roomId}")
     public ResponseEntity<?> getLogs(@PathVariable String roomId) {
         GameState game = gameStore.getGame(roomId);
-        if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+        if (game == null) return roomNotFound(roomId);
         return ResponseEntity.ok(Map.of(
                 "roomId", roomId,
                 "players", buildPlayerSnapshot(game),
@@ -260,7 +259,7 @@ public class DebugController {
     public ResponseEntity<?> exportLogs(@PathVariable String roomId) {
         try {
             GameState game = gameStore.getGame(roomId);
-            if (game == null) return ResponseEntity.badRequest().body("Room not found: " + roomId);
+            if (game == null) return roomNotFound(roomId);
 
             Path logsDir = Paths.get("logs");
             if (!Files.exists(logsDir)) {
@@ -282,16 +281,17 @@ public class DebugController {
             Files.write(filepath, jsonContent.getBytes(StandardCharsets.UTF_8));
 
             Map<String, Object> result = new HashMap<>();
-            result.put("message", "Logs exported successfully.");
+            result.put("message", MessagePayload.of("backend.debug.logsExported", "Logs exported successfully."));
             result.put("file", filepath.toString());
             result.put("filename", filename);
             result.put("totalLogs", game.getLogs().size());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Failed to export logs.");
-            error.put("reason", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
+            return ControllerResponses.badRequest(MessagePayload.of(
+                    "backend.debug.exportLogsFailed",
+                    Map.of("reason", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()),
+                    "Failed to export logs."
+            ));
         }
     }
 
@@ -312,5 +312,20 @@ public class DebugController {
                 })
                 .toList();
     }
-}
 
+    private ResponseEntity<?> roomNotFound(String roomId) {
+        return ControllerResponses.badRequest(MessagePayload.of(
+                "backend.game.notFoundForRoom",
+                Map.of("roomId", roomId),
+                "Game not found for room: " + roomId
+        ));
+    }
+
+    private ResponseEntity<?> playerNotFound(Long playerId) {
+        return ControllerResponses.badRequest(MessagePayload.of(
+                "backend.debug.playerNotFound",
+                Map.of("playerId", playerId),
+                "Player not found: " + playerId
+        ));
+    }
+}

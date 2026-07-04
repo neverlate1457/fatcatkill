@@ -4,6 +4,7 @@ import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.store.GameStore;
 import org.springframework.stereotype.Service;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.HashSet;
@@ -20,6 +22,7 @@ public class RoomService {
 
     private final GameStore gameStore;
     private final SystemOutService systemOutService;
+    private final Random random = new Random();
 
     public RoomService(GameStore gameStore, SystemOutService systemOutService) {
         this.gameStore = gameStore;
@@ -35,7 +38,7 @@ public class RoomService {
                           Long methaneHallucinationTargetId, boolean hostMode) {
         GameState gameState = gameStore.getGame(roomId);
         if (gameState == null || gameState.getStatus() == RoomStatus.PLAYING) {
-            throw new IllegalStateException("房間不存在或遊戲已經在進行中！");
+            throw localized("backend.room.notReady", "Room does not exist or game is already in progress.");
         }
 
         int playerCount = gameState.getPlayers().size();
@@ -47,7 +50,7 @@ public class RoomService {
         
         // 防呆：檢查牌庫數量跟房間人數對不對得上
         if (roleDeck.size() != playerCount) {
-            throw new IllegalArgumentException("房間人數 (" + playerCount + ") 與選擇的模式 [" + gameMode + "] 不符！(該模式可能尚未支援此人數)");
+            throw localized("backend.room.modePlayerCountMismatch", Map.of("playerCount", playerCount, "gameMode", gameMode), "Player count does not match the selected mode.");
         }
 
         // 2. 洗牌 / 主持人自訂牌組照座位發牌
@@ -59,29 +62,37 @@ public class RoomService {
             for (Role fixedRole : fixedRoles) {
                 roleDeck.remove(fixedRole);
             }
-            Collections.shuffle(roleDeck);
+            Collections.shuffle(roleDeck, random);
         }
 
-        // 3. 發牌
+        // 3. 先計算發牌結果並驗證，再寫回玩家狀態，避免開局失敗時污染房間
+        List<Role> assignedRoles = new ArrayList<>();
         int deckIndex = 0;
         for (int i = 0; i < playerCount; i++) {
             PlayerState player = gameState.getPlayers().get(i);
             if (customDeck != null) {
-                player.setRole(roleDeck.get(i));
-            } else if (player.getRole() == null) {
+                assignedRoles.add(roleDeck.get(i));
+            } else if (player.getRole() != null) {
+                assignedRoles.add(player.getRole());
+            } else {
                 if (deckIndex >= roleDeck.size()) {
-                    throw new IllegalArgumentException("Not enough roles left after applying test role assignments.");
+                    throw localized("backend.room.notEnoughRolesAfterFixedAssignments", "Not enough roles left after applying fixed role assignments.");
                 }
-                player.setRole(roleDeck.get(deckIndex++));
+                assignedRoles.add(roleDeck.get(deckIndex++));
             }
+        }
+
+        if (assignedRoles.stream().noneMatch(role -> role == Role.FATCAT)) {
+            throw localized("backend.room.fatcatMissing", "Cannot start game: Fatcat role is missing.");
+        }
+
+        for (int i = 0; i < playerCount; i++) {
+            PlayerState player = gameState.getPlayers().get(i);
+            player.setRole(assignedRoles.get(i));
             player.setSeatNumber(i + 1);
             player.setAlive(true);
             player.setVotedTargetId(null);
             player.setVoteConfirmed(false);
-        }
-
-        if (gameState.getPlayers().stream().noneMatch(player -> player.getRole() == Role.FATCAT)) {
-            throw new IllegalArgumentException("Cannot start game: Fatcat role is missing. Please assign one player as Fatcat or clear a fixed role.");
         }
 
         // ==========================================
@@ -99,9 +110,9 @@ public class RoomService {
                     target = innocentGoodGuys.stream()
                             .filter(player -> player.getUserId().equals(methaneHallucinationTargetId))
                             .findFirst()
-                            .orElseThrow(() -> new IllegalArgumentException("Methane hallucination target must be a non-Methane non-Fatcat player."));
+                            .orElseThrow(() -> localized("backend.room.invalidMethaneTarget", "Methane hallucination target must be a non-Methane non-Fatcat player."));
                 } else {
-                    target = innocentGoodGuys.get(new Random().nextInt(innocentGoodGuys.size()));
+                    target = randomElement(innocentGoodGuys);
                 }
 
                 gameState.setMethaneHallucinationTargetId(target.getUserId());
@@ -166,7 +177,6 @@ public class RoomService {
      */
     private void assignHighRabbitPerceivedRoles(GameState gameState, Role configuredRole) {
         gameState.getHighRabbitPerceivedRoles().clear();
-        Random random = new Random();
         List<PlayerState> players = gameState.getPlayers();
 
         players.stream()
@@ -179,7 +189,7 @@ public class RoomService {
                     if (!candidateRoles.isEmpty()) {
                         Role perceivedRole = configuredRole != null
                                 ? configuredRole
-                                : candidateRoles.get(random.nextInt(candidateRoles.size()));
+                                : randomElement(candidateRoles);
                         gameState.getHighRabbitPerceivedRoles().put(highRabbit.getUserId(), perceivedRole);
                     }
                 });
@@ -187,14 +197,14 @@ public class RoomService {
 
     private List<Role> validateCustomDeck(List<Role> customDeck, int playerCount) {
         if (customDeck.size() != playerCount || customDeck.stream().anyMatch(java.util.Objects::isNull)) {
-            throw new IllegalArgumentException("Custom deck must contain exactly " + playerCount + " roles.");
+            throw localized("backend.room.customDeckSize", Map.of("playerCount", playerCount), "Custom deck must contain exactly " + playerCount + " roles.");
         }
         Set<Role> uniqueRoles = new HashSet<>(customDeck);
         if (uniqueRoles.size() != customDeck.size()) {
-            throw new IllegalArgumentException("Custom deck cannot contain duplicate roles.");
+            throw localized("backend.room.customDeckDuplicate", "Custom deck cannot contain duplicate roles.");
         }
         if (customDeck.stream().filter(role -> role == Role.FATCAT).count() != 1) {
-            throw new IllegalArgumentException("Custom deck must contain exactly one Fatcat.");
+            throw localized("backend.room.customDeckFatcatCount", "Custom deck must contain exactly one Fatcat.");
         }
         return new ArrayList<>(customDeck);
     }
@@ -203,17 +213,17 @@ public class RoomService {
         Set<Role> presentRoles = gameState.getPlayers().stream().map(PlayerState::getRole).collect(java.util.stream.Collectors.toSet());
         if (fatcatHintRoles != null) {
             if (fatcatHintRoles.size() > 3 || new HashSet<>(fatcatHintRoles).size() != fatcatHintRoles.size()) {
-                throw new IllegalArgumentException("Fatcat absent-role hints must contain up to three unique roles.");
+                throw localized("backend.room.fatcatHintsUnique", "Fatcat absent-role hints must contain up to three unique roles.");
             }
             for (Role role : fatcatHintRoles) {
                 if (!isVolunteerRole(role) || presentRoles.contains(role)) {
-                    throw new IllegalArgumentException("Fatcat hint role must be an absent volunteer role: " + role);
+                    throw localized("backend.room.fatcatHintInvalidRole", Map.of("role", role.name()), "Fatcat hint role must be an absent volunteer role: " + role);
                 }
             }
         }
         if (highRabbitRole != null && (!presentRoles.contains(Role.HIGH_RABBIT)
                 || !presentRoles.contains(highRabbitRole) || highRabbitRole == Role.HIGH_RABBIT)) {
-            throw new IllegalArgumentException("High Rabbit illusion must be another role present in the custom deck.");
+            throw localized("backend.room.highRabbitIllusionInvalid", "High Rabbit illusion must be another role present in the custom deck.");
         }
     }
 
@@ -261,13 +271,22 @@ public class RoomService {
 
     private List<Role> drawRandomRoles(List<Role> pool, int count) {
         List<Role> shuffledPool = new ArrayList<>(pool);
-        Collections.shuffle(shuffledPool); // 打亂池子
+        Collections.shuffle(shuffledPool, random);
         return new ArrayList<>(shuffledPool.subList(0, count)); // 抽出前 N 個
     }
 
 
-    private boolean requiresFatcat(String gameMode) {
-        return !"CLASSIC".equalsIgnoreCase(gameMode);
+    private <T> T randomElement(List<T> items) {
+        return items.get(random.nextInt(items.size()));
+    }
+
+
+    private LocalizedGameException localized(String key, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, fallback));
+    }
+
+    private LocalizedGameException localized(String key, Map<String, Object> params, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, params, fallback));
     }
 
 }

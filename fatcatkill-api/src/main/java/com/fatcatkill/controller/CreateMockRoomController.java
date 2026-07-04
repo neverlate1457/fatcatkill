@@ -2,7 +2,9 @@ package com.fatcatkill.controller;
 
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.PlayerState;
+import com.fatcatkill.repository.UserRepository;
 import com.fatcatkill.service.GameLogService;
 import com.fatcatkill.store.GameStore;
 import org.springframework.http.ResponseEntity;
@@ -15,16 +17,17 @@ import java.util.Map;
 import java.util.Set;
 
 @RestController
-@CrossOrigin(origins = "*")
 @RequestMapping("/api/room")
 public class CreateMockRoomController {
 
     private final GameStore gameStore;
     private final GameLogService gameLogService;
+    private final UserRepository userRepository;
 
-    public CreateMockRoomController(GameStore gameStore, GameLogService gameLogService) {
+    public CreateMockRoomController(GameStore gameStore, GameLogService gameLogService, UserRepository userRepository) {
         this.gameStore = gameStore;
         this.gameLogService = gameLogService;
+        this.userRepository = userRepository;
     }
 
     // 新增參數 ?count=10，如果沒傳預設就是 6 人
@@ -47,7 +50,7 @@ public class CreateMockRoomController {
         }
         gameState.setPlayers(players);
         gameStore.saveGame(gameState);
-        gameLogService.append(gameState, null, "CREATE_MOCK_ROOM", null, null, "Created mock room with " + count + " players.");
+        gameLogService.appendPayload(gameState, null, "CREATE_MOCK_ROOM", null, null, MessagePayload.of("backend.room.mockCreated", Map.of("count", count), "Created mock room with " + count + " players."));
         return ResponseEntity.ok(gameState);
     }
 
@@ -92,6 +95,7 @@ public class CreateMockRoomController {
                 PlayerState player = new PlayerState();
                 player.setUserId(userId);
                 player.setUsername(nickname);
+                player.setAccountId(validAccountId(humanData));
                 players.add(player);
                 usedIds.add(userId);
 
@@ -115,7 +119,24 @@ public class CreateMockRoomController {
 
         gameState.setPlayers(players);
         gameStore.saveGame(gameState);
-        gameLogService.append(gameState, null, "FILL_BOTS", null, null, "Filled room to " + count + " players with bots.");
+        gameLogService.appendPayload(gameState, null, "FILL_BOTS", null, null, MessagePayload.of("backend.room.botsFilled", Map.of("count", count), "Filled room to " + count + " players with bots."));
         return ResponseEntity.ok(gameState);
+    }
+
+
+    private Long validAccountId(Map<?, ?> playerData) {
+        Long accountId = parseLong(playerData.get("accountId"));
+        Object rawToken = playerData.get("sessionToken");
+        if (accountId == null || rawToken == null || rawToken.toString().isBlank()) return null;
+        return userRepository.findByIdAndSessionToken(accountId, rawToken.toString()).isPresent() ? accountId : null;
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null || value.toString().isBlank()) return null;
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 }

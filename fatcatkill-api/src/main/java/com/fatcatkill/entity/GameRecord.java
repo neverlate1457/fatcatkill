@@ -41,6 +41,9 @@ public class GameRecord {
     @Column(name = "player_count")
     private Integer playerCount;
 
+    @Column(name = "participant_account_ids", columnDefinition = "TEXT")
+    private String participantAccountIds;
+
     @Column(name = "started_at")
     private LocalDateTime startedAt;
 

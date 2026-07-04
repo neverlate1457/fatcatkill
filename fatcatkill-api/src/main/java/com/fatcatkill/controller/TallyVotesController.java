@@ -7,7 +7,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@CrossOrigin(origins = "*")
 @RequestMapping("/api/day")
 public class TallyVotesController {
 
@@ -30,7 +29,7 @@ public class TallyVotesController {
                     "Votes tallied. Current phase: " + game.getCurrentPhase() + ".");
             return ResponseEntity.ok(gameStore.getGame(roomId));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 
@@ -43,7 +42,7 @@ public class TallyVotesController {
                     "Day discussion advanced to nomination.");
             return ResponseEntity.ok(gameStore.getGame(roomId));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
     }
 }

@@ -21,3 +21,4 @@ server:
 
 fatcatkill:
   debug-actions: ${ENABLE_DEBUG_ACTIONS:false}
+  allowed-origins: ${ALLOWED_ORIGINS:*}

@@ -3,82 +3,104 @@ const http = require('http');
 const { Server } = require('socket.io');
 const axios = require('axios');
 const cors = require('cors');
+const { corsOrigin } = require('./corsConfig');
+const { hasFullObserverAccess, sanitizeGameState } = require('./gameStateSanitizer');
+const { allowedRoute, hostOnlyRoute, normalizeEndpoint } = require('./routeGuard');
+const { registerHttpProxyRoutes } = require('./httpProxyRoutes');
+const { logger } = require('./logger');
+
+const SPRING_BOOT_URL = process.env.SPRING_BOOT_URL || process.env.GATEWAY_BACKEND_URL;
+const PORT = Number(process.env.PORT || process.env.GATEWAY_PORT || 3000);
+
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
+registerHttpProxyRoutes(app, axios, SPRING_BOOT_URL);
+
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: corsOrigin,
     methods: ['GET', 'POST']
   }
 });
 
-const SPRING_BOOT_URL = process.env.SPRING_BOOT_URL || process.env.GATEWAY_BACKEND_URL;
-const PORT = Number(process.env.PORT || process.env.GATEWAY_PORT);
 const roomParticipants = new Map();
 const roomHosts = new Map();
 const roomActionTails = new Map();
 const roomIdentityClaims = new Map();
-const DEBUG_ACTIONS_ENABLED = process.env.ENABLE_DEBUG_ACTIONS === 'true';
-const PUBLIC_PHASES = new Set(['WAITING', 'DAY_START', 'NOMINATION', 'VOTING', 'GAME_OVER']);
-const PHASE_ACTOR_ROLES = Object.freeze({
-  STR_ACTION: 'STR', PH_SERVICE_ACTION: 'PH_SERVICE', GUOGUO_ACTION: 'GUOGUO',
-  FORVKUSA_ACTION: 'FORVKUSA', HATONG_ACTION: 'HATONG', XIAOXIANG_ACTION: 'XIAOXIANG',
-  MUBAIMU_ACTION: 'MUBAIMU', SHUSHU_ACTION: 'SHUSHU', GRASS_BEAN_ACTION: 'GRASS_BEAN',
-  AC_CAT_ACTION: 'AC_CAT', XIANGXIANG_ACTION: 'XIANGXIANG', LIVER_INDEX_ACTION: 'LIVER_INDEX',
-  CAN_MAN_ACTION: 'CAN_MAN', NANGONG_ACTION: 'NANGONG', ANDY_ACTION: 'ANDY',
-  METHANE_ACTION: 'METHANE', MOCHI_BOSS_ACTION: 'MOCHI_BOSS'
-});
+const messagePayload = (key, params = {}, fallback = key) => ({ key, params, fallback });
 
-const normalizeEndpoint = (endpoint) => {
-  if (!endpoint || typeof endpoint !== 'string') {
-    throw new Error('Missing endpoint.');
-  }
-  return endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+const gatewayError = (key, params = {}, fallback = key) => {
+  const error = new Error(fallback);
+  error.payload = messagePayload(key, params, fallback);
+  return error;
 };
-
-const allowedRoute = (method, pathname, roomId) => {
-  const escapedRoomId = roomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const routes = [
-    ['GET', new RegExp(`^/room/${escapedRoomId}$`)],
-    ['DELETE', new RegExp(`^/room/${escapedRoomId}$`)],
-    ['POST', /^\/game\/action$/],
-    ['POST', /^\/game\/bot\/auto$/],
-    ['POST', /^\/day\/vote(?:\/confirm|\/cancel|\/skip)?$/],
-    ['POST', new RegExp(`^/day/(?:nomination|tally)/${escapedRoomId}$`)],
-    ['POST', new RegExp(`^/room/(?:start|fill-bots)/${escapedRoomId}$`)],
-    ['GET', new RegExp(`^/logs/${escapedRoomId}$`)]
-  ];
-  if (DEBUG_ACTIONS_ENABLED) {
-    routes.push(
-      ['POST', new RegExp(`^/room/mock/${escapedRoomId}$`)],
-      ['GET', new RegExp(`^/debug/reveal/${escapedRoomId}$`)],
-      ['POST', /^\/debug\//]
-    );
-  }
-  return routes.some(([allowedMethod, pattern]) => allowedMethod === method && pattern.test(pathname));
-};
-
-const hostOnlyRoute = (method, pathname) => method === 'DELETE'
-  || pathname === '/game/bot/auto'
-  || /^\/logs\//.test(pathname)
-  || /^\/room\/(?:start|fill-bots|mock)\//.test(pathname)
-  || /^\/day\/(?:nomination|tally)\//.test(pathname);
 
 const validateIdentityClaim = (claims, clientId, userId, roomId) => {
   const claimedUserId = claims.byClient.get(clientId);
   if (claimedUserId != null && claimedUserId !== userId) {
-    return `This browser already joined room ${roomId} as player ${claimedUserId}.`;
+    return messagePayload("gateway.room.browserAlreadyJoined", { roomId, playerId: claimedUserId }, `This browser already joined room ${roomId} as player ${claimedUserId}.`);
   }
   const claimedClientId = claims.byUser.get(userId);
   if (claimedClientId != null && claimedClientId !== clientId) {
-    return `Player ID ${userId} is already in use in this room.`;
+    return messagePayload("gateway.room.playerIdInUse", { playerId: userId }, `Player ID ${userId} is already in use in this room.`);
   }
   return null;
 };
+const roomCapacity = (roomId, fallbackSize = 7) => {
+  const participants = Array.from(roomParticipants.get(roomId)?.values?.() || []);
+  const hostId = roomHosts.get(roomId);
+  return participants.find((participant) => participant.userId === hostId)?.roomSize
+    || participants.find((participant) => participant.roomSize)?.roomSize
+    || fallbackSize;
+};
+
+const playerParticipants = (roomId) => Array.from(roomParticipants.get(roomId)?.values?.() || [])
+  .filter((participant) => !participant.isSpectator)
+  .sort((a, b) => Number(a.userId) - Number(b.userId));
+
+const releaseIdentityClaim = (roomId, clientId, userId) => {
+  const claims = roomIdentityClaims.get(roomId);
+  if (!claims) return;
+  if (clientId && claims.byClient.get(clientId) === userId) claims.byClient.delete(clientId);
+  if (userId != null && claims.byUser.get(userId) === clientId) claims.byUser.delete(userId);
+};
+
+const allocatePlayerId = (roomId, capacity) => {
+  const used = new Set(playerParticipants(roomId).map((participant) => Number(participant.userId)));
+  for (let seat = 1; seat <= capacity; seat += 1) {
+    if (!used.has(seat)) return seat;
+  }
+  return null;
+};
+
+const allocateSpectatorId = (roomId) => {
+  const claims = roomIdentityClaims.get(roomId);
+  for (let id = 9001; id < 10000; id += 1) {
+    if (!claims?.byUser?.has(id)) return id;
+  }
+  return Date.now();
+};
+
+const allPlayersReady = (roomId) => {
+  const players = playerParticipants(roomId);
+  const hostId = roomHosts.get(roomId);
+  return players.length === 0
+    || players.every((participant) => participant.userId === hostId || participant.ready === true);
+};
+
+const emitRoomIdentity = (socket) => {
+  socket.emit('roomIdentityUpdate', {
+    roomId: socket.data.roomId,
+    userId: socket.data.userId,
+    hostId: roomHosts.get(socket.data.roomId) ?? null,
+    spectator: Boolean(socket.data.isSpectator)
+  });
+};
+
 
 const acquireRoomLock = async (roomId) => {
   const previous = roomActionTails.get(roomId) || Promise.resolve();
@@ -106,85 +128,13 @@ const formatErrorMessage = (error) => {
   if (data?.error && data?.path) return `${data.error}: ${data.path}`;
   if (data?.error) return data.error;
   if (data) return JSON.stringify(data);
-  return error.message || 'Action failed.';
+  if (error.payload) return error.payload;
+  return messagePayload("gateway.actionFailed", {}, error.message || "Action failed.");
 };
 
 const fetchRoomState = async (roomId) => {
   const response = await axios.get(`${SPRING_BOOT_URL}/room/${roomId}`);
   return response.data;
-};
-
-const sanitizeGameState = (gameState, viewerId, spectator = false) => {
-  if (!gameState || typeof gameState !== 'object') return gameState;
-
-  const sanitized = JSON.parse(JSON.stringify(gameState));
-  if (spectator) return sanitized;
-  const normalizedViewerId = viewerId == null ? null : String(viewerId);
-const viewer = sanitized.players?.find((player) => String(player.userId) === normalizedViewerId);
-  const actualPhase = sanitized.currentPhase;
-  if (!PUBLIC_PHASES.has(actualPhase)) {
-    const perceivedRole = sanitized.highRabbitPerceivedRoles?.[normalizedViewerId];
-    const effectiveViewerRole = viewer?.role === 'HIGH_RABBIT' && perceivedRole
-      ? perceivedRole
-      : viewer?.role === 'PH_SERVICE' && sanitized.phServiceStolenRole
-        ? sanitized.phServiceStolenRole
-        : viewer?.role;
-    const requiredRole = PHASE_ACTOR_ROLES[actualPhase];
-    const isFatcatTurn = actualPhase === 'NIGHT_START'
-      && (sanitized.fatcatKillerPlayerId != null
-        ? String(sanitized.fatcatKillerPlayerId) === normalizedViewerId
-        : viewer?.role === 'FATCAT');
-    const isViewerTurn = Boolean(viewer?.alive)
-      && (isFatcatTurn || (requiredRole && effectiveViewerRole === requiredRole));
-    if (!isViewerTurn) sanitized.currentPhase = 'NIGHT_WAITING';
-  }
-
-sanitized.players = (sanitized.players || []).map((player) => {
-    const isViewer = String(player.userId) === normalizedViewerId;
-    return {
-      ...player,
-      role: isViewer ? player.role : null,
-      votedTargetId: isViewer ? player.votedTargetId : null
-    };
-  });
-  sanitized.nightActions = {};
-  sanitized.methaneHallucinationTargetId = null;
-  sanitized.guoguoHint = null;
-  sanitized.andyCloudPlayerId = null;
-  sanitized.mochiBossPendingCheckPlayerId = null;
-  sanitized.chenPendingKillPlayerId = null;
-  sanitized.fatcatAbsentVolunteerHintRoles = [];
-  sanitized.fatcatKillBlockedPlayerIds = [];
-  sanitized.delayedDeathRounds = {};
-  sanitized.mubaimuDoomRounds = {};
-sanitized.barkKingDoomRounds = {};
-  sanitized.logs = [];
-  sanitized.strOriginalSeatNumbers = {};
-  sanitized.strTemporarySeatNumbers = {};
-  sanitized.strSwappedSeatNumbers = [];
-  sanitized.lastDayVoterIds = [];
-  sanitized.kbNominationTrapTriggeredIds = [];
-  sanitized.chenUsedPlayerIds = [];
-  sanitized.chenSkippedRounds = {};
-  sanitized.saltedFishUsedPlayerIds = [];
-  sanitized.saltedFishSkippedRounds = {};
-
-  const ownKey = normalizedViewerId;
-  sanitized.privateMessages = ownKey && sanitized.privateMessages?.[ownKey]
-    ? { [ownKey]: sanitized.privateMessages[ownKey] }
-    : {};
-  sanitized.highRabbitPerceivedRoles = ownKey && sanitized.highRabbitPerceivedRoles?.[ownKey]
-    ? { [ownKey]: sanitized.highRabbitPerceivedRoles[ownKey] }
-    : {};
-  sanitized.phServiceStolenRole = viewer?.role === 'PH_SERVICE' ? sanitized.phServiceStolenRole : null;
-  sanitized.ratManCheckerIds = viewer?.role === 'RAT_MAN' ? sanitized.ratManCheckerIds : [];
-  sanitized.hostConfiguredFatcatHintRoles = null;
-  sanitized.hostConfiguredHighRabbitRole = null;
-  sanitized.fatcatKillerPlayerId = String(sanitized.fatcatKillerPlayerId) === normalizedViewerId
-    ? sanitized.fatcatKillerPlayerId
-    : null;
-
-  return sanitized;
 };
 
 const broadcastRoomState = async (roomId, fallbackData = null) => {
@@ -208,7 +158,7 @@ const broadcastRoomState = async (roomId, fallbackData = null) => {
 const getRoomList = () => Array.from(roomParticipants.entries())
   .map(([roomId, participants]) => {
     const connected = Array.from(participants.values());
-    const players = connected.filter((participant) => !participant.isSpectator);
+    const players = connected.filter((participant) => !participant.isSpectator).sort((a, b) => Number(a.userId) - Number(b.userId));
     return {
       roomId,
       hostId: roomHosts.get(roomId) ?? null,
@@ -223,9 +173,12 @@ const getRoomList = () => Array.from(roomParticipants.entries())
 
 const connectedPlayersForRoom = (participants) => Array.from(participants?.values?.() || [])
   .filter((participant) => !participant.isSpectator && participant.userId != null)
+  .sort((a, b) => Number(a.userId) - Number(b.userId))
   .map((participant) => ({
     userId: Number(participant.userId),
-    nickname: participant.nickname || `Player ${participant.userId}`
+    nickname: participant.nickname || `Player ${participant.userId}`,
+    accountId: participant.accountId || null,
+    sessionToken: participant.sessionToken || null
   }));
 
 const broadcastRoomList = () => {
@@ -256,20 +209,34 @@ const leaveTrackedRoom = (socket) => {
   if (!roomId) return;
 
   const participants = roomParticipants.get(roomId);
+  const leaving = participants?.get(socket.id);
+  if (leaving) {
+    releaseIdentityClaim(roomId, leaving.clientId, leaving.userId);
+  }
+
   if (participants) {
     participants.delete(socket.id);
     if (participants.size === 0) {
       roomParticipants.delete(roomId);
+      roomHosts.delete(roomId);
+      roomIdentityClaims.delete(roomId);
+    } else if (leaving && roomHosts.get(roomId) === leaving.userId) {
+      const nextHost = Array.from(participants.values()).find((participant) => participant.isSpectator)
+        || playerParticipants(roomId)[0]
+        || Array.from(participants.values())[0];
+      if (nextHost) roomHosts.set(roomId, nextHost.userId);
     }
   }
 
   socket.leave(roomId);
   socket.data.roomId = null;
+  socket.data.userId = null;
+  socket.data.isSpectator = false;
   broadcastRoomList();
 };
 
 io.on('connection', (socket) => {
-  console.log(`Player connected: ${socket.id}`);
+  logger.info(`Player connected: ${socket.id}`);
 
   socket.on('listRooms', (ack) => {
     const rooms = getRoomList();
@@ -286,30 +253,46 @@ io.on('connection', (socket) => {
     };
 
     const roomId = String(typeof payload === 'string' ? payload : payload.roomId || '');
-    const userId = Number(typeof payload === 'string' ? null : payload.userId);
+    let userId = Number(typeof payload === 'string' ? null : payload.userId);
+    const hasExplicitUserId = Number.isSafeInteger(userId) && userId > 0;
     const clientId = String(typeof payload === 'string' ? '' : payload.clientId || '');
     const requestedRoomSize = typeof payload === 'string' ? 7 : Number(payload.roomSize);
     const roomSize = [6, 7, 10].includes(requestedRoomSize) ? requestedRoomSize : 7;
-    const nickname = typeof payload === 'string'
-      ? null
-      : (payload.nickname || `Player ${userId || socket.id.slice(0, 5)}`);
     const wantsSpectator = typeof payload !== 'string' && payload.spectator === true;
+    const accountId = Number(typeof payload === 'string' ? null : payload.accountId);
+    const sessionToken = typeof payload === 'string' ? null : payload.sessionToken;
 
-    if (!roomId) return rejectJoin('Missing roomId.');
-    if (!Number.isSafeInteger(userId) || userId <= 0) {
-      return rejectJoin('A valid positive player ID is required.');
-    }
+    if (!roomId) return rejectJoin(messagePayload('gateway.join.missingRoomId', {}, 'Missing roomId.'));
     if (!/^[A-Za-z0-9-]{16,100}$/.test(clientId)) {
-      return rejectJoin('A valid client identity is required.');
-    }
-    if (wantsSpectator && roomHosts.has(roomId) && roomHosts.get(roomId) !== userId) {
-      return rejectJoin('Only the room host can join as spectator.');
+      return rejectJoin(messagePayload('gateway.join.invalidClientId', {}, 'A valid client identity is required.'));
     }
 
     if (!roomIdentityClaims.has(roomId)) {
       roomIdentityClaims.set(roomId, { byClient: new Map(), byUser: new Map() });
     }
-    const claims = roomIdentityClaims.get(roomId);
+
+    const existingClaim = roomIdentityClaims.get(roomId).byClient.get(clientId);
+    if (!hasExplicitUserId && existingClaim != null) {
+      userId = existingClaim;
+    } else if (!hasExplicitUserId && wantsSpectator) {
+      userId = roomHosts.get(roomId) || allocateSpectatorId(roomId);
+    } else if (!hasExplicitUserId) {
+      const openSeat = allocatePlayerId(roomId, roomSize);
+      if (openSeat == null) return rejectJoin(messagePayload('gateway.join.roomFull', {}, 'This room is full.'));
+      userId = openSeat;
+    }
+
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return rejectJoin(messagePayload('gateway.join.validPositiveId', {}, 'A valid positive player ID is required.'));
+    }
+    if (!wantsSpectator && (userId < 1 || userId > roomSize)) {
+      return rejectJoin(messagePayload('gateway.join.idRange', { roomSize }, `Player ID must be between 1 and ${roomSize}.`));
+    }
+    if (wantsSpectator && roomHosts.has(roomId) && roomHosts.get(roomId) !== userId) {
+      return rejectJoin(messagePayload('gateway.join.hostSpectatorOnly', {}, 'Only the room host can join as spectator.'));
+    }
+
+    let claims = roomIdentityClaims.get(roomId);
     const claimError = validateIdentityClaim(claims, clientId, userId, roomId);
     if (claimError) return rejectJoin(claimError);
 
@@ -322,10 +305,18 @@ io.on('connection', (socket) => {
       }
     }
 
+    if (!roomIdentityClaims.has(roomId)) {
+      roomIdentityClaims.set(roomId, { byClient: new Map(), byUser: new Map() });
+    }
+    claims = roomIdentityClaims.get(roomId);
+    const refreshedClaimError = validateIdentityClaim(claims, clientId, userId, roomId);
+    if (refreshedClaimError) return rejectJoin(refreshedClaimError);
+
     if (socket.data.roomId === roomId
         && socket.data.userId === userId
         && socket.data.clientId === clientId
         && socket.data.isSpectator === wantsSpectator) {
+      emitRoomIdentity(socket);
       if (typeof ack === 'function') ack({ ok: true, roomId, userId, hostId: roomHosts.get(roomId) ?? userId });
       return;
     }
@@ -333,6 +324,10 @@ io.on('connection', (socket) => {
     leaveTrackedRoom(socket);
     claims.byClient.set(clientId, userId);
     claims.byUser.set(userId, clientId);
+
+    const nickname = typeof payload === 'string'
+      ? null
+      : (payload.nickname || `Player ${userId || socket.id.slice(0, 5)}`);
 
     socket.join(roomId);
     socket.data.roomId = roomId;
@@ -349,12 +344,16 @@ io.on('connection', (socket) => {
       userId,
       nickname,
       roomSize,
-      isSpectator: wantsSpectator
+      isSpectator: wantsSpectator,
+      ready: wantsSpectator,
+      accountId: Number.isSafeInteger(accountId) && accountId > 0 ? accountId : null,
+      sessionToken: sessionToken || null
     });
     broadcastRoomList();
 
-    console.log(`Player ${socket.id} joined room ${roomId} as ${userId}`);
+    logger.info(`Player ${socket.id} joined room ${roomId} as ${userId}`);
     socket.emit('message', `${nickname} connected to room ${roomId}`);
+    emitRoomIdentity(socket);
     if (typeof ack === 'function') ack({ ok: true, roomId, userId, hostId: roomHosts.get(roomId) });
 
     try {
@@ -366,36 +365,124 @@ io.on('connection', (socket) => {
       }
     }
   });
+  socket.on('setReady', (payload = {}, ack) => {
+    try {
+      const roomId = socket.data.roomId;
+      const participants = roomParticipants.get(roomId);
+      const participant = participants?.get(socket.id);
+      if (!roomId || !participant) throw gatewayError('gateway.ready.joinRoomFirst', {}, 'Join a room before changing ready state.');
+      if (participant.isSpectator) throw gatewayError('gateway.ready.spectatorNoReady', {}, 'Spectators do not need to ready.');
+      participant.ready = payload.ready === true;
+      broadcastRoomList();
+      if (typeof ack === 'function') ack({ ok: true, ready: participant.ready });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      socket.emit('actionError', message);
+      if (typeof ack === 'function') ack({ ok: false, error: message });
+    }
+  });
 
+  socket.on('moveSeat', (payload = {}, ack) => {
+    try {
+      const roomId = socket.data.roomId;
+      const participants = roomParticipants.get(roomId);
+      const participant = participants?.get(socket.id);
+      if (!roomId || !participant) throw gatewayError('gateway.seat.joinRoomFirst', {}, 'Join a room before moving seats.');
+      if (participant.isSpectator) throw gatewayError('gateway.seat.spectatorCannotSeat', {}, 'Spectators cannot occupy player seats.');
+      const targetSeat = Number(payload.seatId);
+      const capacity = roomCapacity(roomId, participant.roomSize);
+      if (!Number.isSafeInteger(targetSeat) || targetSeat < 1 || targetSeat > capacity) {
+        throw gatewayError("gateway.seat.invalidSeat", { capacity }, `Choose an open seat from 1 to ${capacity}.`);
+      }
+      const occupied = Array.from(participants.values()).find((entry) => !entry.isSpectator && Number(entry.userId) === targetSeat && entry.socketId !== socket.id);
+      if (occupied) throw gatewayError('gateway.seat.occupied', {}, 'That seat is already occupied.');
+      const oldUserId = participant.userId;
+      releaseIdentityClaim(roomId, participant.clientId, oldUserId);
+      if (!roomIdentityClaims.has(roomId)) {
+        roomIdentityClaims.set(roomId, { byClient: new Map(), byUser: new Map() });
+      }
+      let claims = roomIdentityClaims.get(roomId);
+      const claimError = validateIdentityClaim(claims, participant.clientId, targetSeat, roomId);
+      if (claimError) {
+        claims.byClient.set(participant.clientId, oldUserId);
+        claims.byUser.set(oldUserId, participant.clientId);
+        throw gatewayError(claimError.key, claimError.params, claimError.fallback);
+      }
+      claims.byClient.set(participant.clientId, targetSeat);
+      claims.byUser.set(targetSeat, participant.clientId);
+      participant.userId = targetSeat;
+      participant.ready = false;
+      socket.data.userId = targetSeat;
+      if (roomHosts.get(roomId) === oldUserId) roomHosts.set(roomId, targetSeat);
+      emitRoomIdentity(socket);
+      broadcastRoomList();
+      if (typeof ack === 'function') ack({ ok: true, userId: targetSeat, hostId: roomHosts.get(roomId) });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      socket.emit('actionError', message);
+      if (typeof ack === 'function') ack({ ok: false, error: message });
+    }
+  });
+
+  socket.on('kickPlayer', (payload = {}, ack) => {
+    try {
+      const roomId = socket.data.roomId;
+      const participants = roomParticipants.get(roomId);
+      if (!roomId || !participants) throw gatewayError('gateway.kick.joinRoomFirst', {}, 'Join a room before kicking players.');
+      if (roomHosts.get(roomId) !== socket.data.userId) throw gatewayError('gateway.kick.hostOnly', {}, 'Only the room host can kick players.');
+      const targetUserId = Number(payload.userId);
+      const targetEntry = Array.from(participants.values()).find((participant) => !participant.isSpectator && Number(participant.userId) === targetUserId);
+      if (!targetEntry) throw gatewayError('gateway.kick.playerNotFound', {}, 'Player not found in this room.');
+      if (targetEntry.socketId === socket.id) throw gatewayError('gateway.kick.cannotKickSelf', {}, 'Host cannot kick themself.');
+      const targetSocket = io.sockets.sockets.get(targetEntry.socketId);
+      releaseIdentityClaim(roomId, targetEntry.clientId, targetEntry.userId);
+      participants.delete(targetEntry.socketId);
+      if (targetSocket) {
+        targetSocket.emit('kickedFromRoom', { roomId, message: messagePayload('room.kicked', {}, 'You were kicked from the room.') });
+        targetSocket.leave(roomId);
+        targetSocket.data.roomId = null;
+        targetSocket.data.userId = null;
+      }
+      broadcastRoomList();
+      if (typeof ack === 'function') ack({ ok: true });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      socket.emit('actionError', message);
+      if (typeof ack === 'function') ack({ ok: false, error: message });
+    }
+  });
   socket.on('gameAction', async (payload = {}, ack) => {
     try {
       if (!socket.data.roomId || socket.data.userId == null) {
-        throw new Error('Join a room before sending actions.');
+        throw gatewayError('gateway.action.joinRoomFirst', {}, 'Join a room before sending actions.');
       }
 
       const requestedRoomId = String(payload.roomId || '');
       if (requestedRoomId !== socket.data.roomId) {
-        throw new Error('Room mismatch.');
+        throw gatewayError('gateway.action.roomMismatch', {}, 'Room mismatch.');
       }
 
       const endpointUrl = new URL(normalizeEndpoint(payload.endpoint), 'http://gateway.local');
       const httpMethod = String(payload.method || 'POST').toUpperCase();
       if (!allowedRoute(httpMethod, endpointUrl.pathname, socket.data.roomId)) {
-        throw new Error('Action route is not allowed.');
+        throw gatewayError('gateway.action.routeNotAllowed', {}, 'Action route is not allowed.');
       }
       const isHostRoute = hostOnlyRoute(httpMethod, endpointUrl.pathname);
       if (isHostRoute && roomHosts.get(socket.data.roomId) !== socket.data.userId) {
-        throw new Error('Only the room host can perform this action.');
+        throw gatewayError('gateway.action.hostOnly', {}, 'Only the room host can perform this action.');
       }
       if (socket.data.isSpectator && !isHostRoute
           && !(httpMethod === 'GET' && endpointUrl.pathname === `/room/${socket.data.roomId}`)) {
-        throw new Error('Spectators cannot perform player actions.');
+        throw gatewayError('gateway.action.spectatorCannotAct', {}, 'Spectators cannot perform player actions.');
+      }
+      if (httpMethod === 'POST' && /^\/room\/start\//.test(endpointUrl.pathname) && !allPlayersReady(socket.data.roomId)) {
+        throw gatewayError('gateway.action.playersMustReady', {}, 'All non-host players must be ready before the host can start.');
       }
 
       const path = `${endpointUrl.pathname}${endpointUrl.search}`;
       const url = `${SPRING_BOOT_URL}${path}`;
       let data = bindActorIdentity(payload.data || {}, socket);
-      if (/^\/room\/fill-bots\//.test(endpointUrl.pathname)) {
+      if (/^\/room\/(?:start|fill-bots)\//.test(endpointUrl.pathname)) {
         data = {
           ...data,
           hostMode: Boolean(socket.data.isSpectator),
@@ -428,7 +515,7 @@ io.on('connection', (socket) => {
       };
       if (response.data?.message) socket.emit('actionResult', result);
       if (typeof ack === 'function') ack(result);
-} catch (error) {
+    } catch (error) {
       const isMissingWaitingRoom = error.response?.status === 404
         && String(payload.method || 'POST').toUpperCase() === 'GET'
         && String(payload.endpoint || '').startsWith(`/room/${socket.data.roomId}`);
@@ -438,7 +525,7 @@ io.on('connection', (socket) => {
       }
 
       const message = formatErrorMessage(error);
-      console.error('Action failed:', message);
+      logger.error('Action failed:', message);
       socket.emit('actionError', message);
       if (typeof ack === 'function') ack({ ok: false, error: message });
     }
@@ -453,13 +540,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     leaveTrackedRoom(socket);
-    console.log(`Player disconnected: ${socket.id}`);
+    logger.info(`Player disconnected: ${socket.id}`);
   });
 });
 
 if (require.main === module) {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Gateway running on port ${PORT}`);
+    logger.info(`Gateway running on port ${PORT}`);
   });
 }
 
@@ -469,10 +556,7 @@ module.exports = {
   hostOnlyRoute,
   connectedPlayersForRoom,
   sanitizeGameState,
-  validateIdentityClaim
+  hasFullObserverAccess,
+  validateIdentityClaim,
+  formatErrorMessage
 };
-
-
-
-
-

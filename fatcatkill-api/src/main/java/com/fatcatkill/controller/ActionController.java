@@ -2,12 +2,14 @@ package com.fatcatkill.controller;
 
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.GameActionPayload;
 import com.fatcatkill.model.PlayerState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.service.BotService;
-import com.fatcatkill.service.DayService;
+import com.fatcatkill.service.GameActionDispatcher;
 import com.fatcatkill.service.GameHelperService;
-import com.fatcatkill.service.NightService;
 import com.fatcatkill.service.SystemOutService;
+import com.fatcatkill.service.UnknownGameActionException;
 import com.fatcatkill.store.GameStore;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,186 +18,91 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@CrossOrigin(origins = "*")
 @RequestMapping("/api/game")
 public class ActionController {
 
-    private final NightService nightService;
-    private final DayService dayService;
     private final GameStore gameStore;
     private final GameHelperService gameHelper;
     private final SystemOutService systemOutService;
     private final BotService botService;
+    private final GameActionDispatcher actionDispatcher;
 
-    public ActionController(NightService nightService, DayService dayService, GameStore gameStore, BotService botService, SystemOutService systemOutService, GameHelperService gameHelper) {
-        this.nightService = nightService;
-        this.dayService = dayService;
+    public ActionController(GameStore gameStore, BotService botService, SystemOutService systemOutService, GameHelperService gameHelper, GameActionDispatcher actionDispatcher) {
         this.gameStore = gameStore;
         this.botService = botService;
         this.systemOutService = systemOutService;
         this.gameHelper = gameHelper;
+        this.actionDispatcher = actionDispatcher;
     }
 
     @PostMapping("/action")
     public ResponseEntity<?> executeAction(@RequestBody Map<String, Object> payload) {
         try {
-            String roomId = (String) payload.get("roomId");
-            Long playerId = ((Number) payload.get("playerId")).longValue();
-            Role targetRole = payload.containsKey("targetRole") && payload.get("targetRole") != null
-                    ? Role.valueOf((String) payload.get("targetRole")) : null;
-            String actionType = (String) payload.get("actionType");
+            GameActionPayload action = GameActionPayload.from(payload);
+            GameState currentGame = gameStore.getGame(action.roomId());
+            PlayerState actionPlayer = currentGame == null ? null : gameHelper.getPlayer(currentGame, action.playerId());
+            Role illusionRole = roleForAction(action.actionType());
 
+            String resultMessage = gameHelper.isHighRabbitIllusionOf(currentGame, actionPlayer, illusionRole)
+                    ? "Ability activated."
+                    : actionDispatcher.dispatch(action);
 
-            Long targetId = payload.containsKey("targetId") && payload.get("targetId") != null
-                    ? ((Number) payload.get("targetId")).longValue() : null;
-            Long targetId1 = payload.containsKey("targetId1") && payload.get("targetId1") != null
-                    ? ((Number) payload.get("targetId1")).longValue() : null;
-            Long targetId2 = payload.containsKey("targetId2") && payload.get("targetId2") != null
-                    ? ((Number) payload.get("targetId2")).longValue() : null;
-
-            String resultMessage = null;
-
-
-            GameState currentGame = gameStore.getGame(roomId);
-            PlayerState actionPlayer = currentGame == null ? null : gameHelper.getPlayer(currentGame, playerId);
-            Role illusionRole = roleForAction(actionType);
-            if (gameHelper.isHighRabbitIllusionOf(currentGame, actionPlayer, illusionRole)) {
-                resultMessage = "Ability activated.";
-            } else {
-                switch (actionType) {
-
-                case "FATCAT_KILL":
-                    resultMessage = nightService.fatcatKill(roomId, playerId, targetId);
-                    break;
-                case "FATCAT_TEAM_HINT":
-                    resultMessage = nightService.fatcatTeamHint(roomId, playerId);
-                    break;
-                case "EMPEROR_REVEAL":
-                    resultMessage = nightService.emperorRevealAction(roomId, playerId);
-                    break;
-                case "PH_SERVICE_ACTION":
-                    resultMessage = nightService.phServiceAction(roomId, playerId, targetRole);
-                    break;
-                case "STR_ACTION":
-                    nightService.strAction(roomId, playerId, targetId);
-                    break;
-                case "STR_SKIP":
-                    nightService.strSkipAction(roomId, playerId);
-                    break;
-                case "GUOGUO_ACTION":
-                    resultMessage = nightService.guoguoAction(roomId, playerId);
-                    break;
-                case "FORVKUSA_ACTION":
-                    resultMessage = nightService.forvkusaAction(roomId, playerId);
-                    break;
-                case "HATONG_ACTION":
-                    resultMessage = nightService.hatongAction(roomId, playerId);
-                    break;
-                case "XIAOXIANG_ACTION":
-                    resultMessage = nightService.xiaoxiangAction(roomId, playerId);
-                    break;
-                case "MUBAIMU_ACTION":
-                    java.util.List<Long> tartTargets = new java.util.ArrayList<>();
-                    if (targetId1 != null) {
-                        tartTargets.add(targetId1);
-                    }
-                    if (targetId2 != null) {
-                        tartTargets.add(targetId2);
-                    }
-                    if (payload.containsKey("targetId3") && payload.get("targetId3") != null) {
-                        tartTargets.add(((Number) payload.get("targetId3")).longValue());
-                    }
-                    resultMessage = nightService.mubaimuAction(roomId, playerId, tartTargets);
-                    break;
-                case "SHUSHU_ACTION":
-                    resultMessage = nightService.shushuAction(roomId, playerId, targetId1, targetId2);
-                    targetId = targetId1;
-                    break;
-                case "GRASS_BEAN_ACTION":
-                    resultMessage = nightService.grassBeanAction(roomId, playerId);
-                    break;
-                case "LIVER_ACTION":
-                    nightService.liverHeroAction(roomId, playerId, targetId);
-                    break;
-                case "CANMAN_ACTION":
-                    nightService.canManAction(roomId, playerId, targetId);
-                    break;
-                case "NANGONG_ACTION":
-                    nightService.nangongAction(roomId, playerId, targetId);
-                    break;
-                case "ANDY_ACTION":
-                    resultMessage = nightService.andyAction(roomId, playerId);
-                    break;
-                case "METHANE_CHECK":
-                    if (targetId1 == null || targetId2 == null) {
-                        throw new IllegalArgumentException("Methane must choose two targets.");
-                    }
-                    resultMessage = nightService.methaneAction(roomId, playerId, targetId1, targetId2);
-                    break;
-                case "XIANGXIANG_ACTION":
-                    resultMessage = nightService.xiangxiangAction(roomId, playerId);
-                    break;
-                case "AC_CAT_ACTION":
-                    resultMessage = nightService.acCatAction(roomId, playerId);
-                    break;
-                case "MOCHI_BOSS_CHECK":
-                    resultMessage = nightService.mochiBossCheckAction(roomId, playerId, targetId);
-                    break;
-
-
-                case "SALTED_FISH_STAB":
-                    resultMessage = dayService.saltedFishStab(roomId, playerId, targetId);
-                    break;
-                case "SALTED_FISH_SKIP":
-                    resultMessage = dayService.skipSaltedFishStab(roomId, playerId);
-                    break;
-                case "CHEN_ACTION":
-                    resultMessage = dayService.chenAction(roomId, playerId, targetId);
-                    break;
-                case "CHEN_SKIP":
-                    resultMessage = dayService.skipChenAction(roomId, playerId);
-                    break;
-
-                default:
-                    return ResponseEntity.badRequest().body("Unknown action type: " + actionType);
-                }
-            }
-
-
-            try {
-                com.fatcatkill.model.GameState game = gameStore.getGame(roomId);
-                if (game != null) {
-                    PlayerState logPlayer = actionPlayer;
-                    String username = logPlayer == null ? null : logPlayer.getUsername();
-                    String roleName = logPlayer == null || logPlayer.getRole() == null ? null : logPlayer.getRole().name();
-                    String ts = java.time.Instant.now().toString();
-
-                    Long loggedTargetId = targetId != null ? targetId : targetId1;
-                    com.fatcatkill.model.GameLogEntry entry = new com.fatcatkill.model.GameLogEntry(ts, playerId, username, roleName, actionType, loggedTargetId, targetId2, resultMessage);
-                    game.addLog(entry);
-                    gameStore.saveGame(game);
-                    systemOutService.action(game, playerId, actionType, loggedTargetId, targetId2, resultMessage);
-                }
-            } catch (Exception logEx) {
-
-                System.err.println("Failed to write game log: " + logEx.getMessage());
-            }
-
+            GameState updatedGame = gameStore.getGame(action.roomId());
+            Object responseMessage = messagePayloadFor(action.actionType(), updatedGame, resultMessage);
+            writeActionLog(action, actionPlayer, resultMessage, responseMessage);
 
             if (resultMessage != null) {
-
                 return ResponseEntity.ok(Map.of(
-                        "gameState", gameStore.getGame(roomId),
-                        "message", resultMessage
+                        "gameState", gameStore.getGame(action.roomId()),
+                        "message", responseMessage
                 ));
-            } else {
-
-                return ResponseEntity.ok(gameStore.getGame(roomId));
             }
-
+            return ResponseEntity.ok(gameStore.getGame(action.roomId()));
+        } catch (UnknownGameActionException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", MessagePayload.of("backend.action.unknownType", Map.of("actionType", e.getActionType()), e.getMessage())));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ControllerResponses.badRequest(e);
         }
+    }
+
+    private void writeActionLog(GameActionPayload action, PlayerState actionPlayer, String resultMessage, Object responseMessage) {
+        try {
+            GameState game = gameStore.getGame(action.roomId());
+            if (game == null) return;
+            String username = actionPlayer == null ? null : actionPlayer.getUsername();
+            String roleName = actionPlayer == null || actionPlayer.getRole() == null ? null : actionPlayer.getRole().name();
+            String ts = java.time.Instant.now().toString();
+            Long loggedTargetId = action.primaryLogTargetId();
+            com.fatcatkill.model.GameLogEntry entry = new com.fatcatkill.model.GameLogEntry(ts, action.playerId(), username, roleName, action.actionType(), loggedTargetId, action.targetId2(), resultMessage);
+            if (responseMessage instanceof MessagePayload payloadMessage) {
+                entry.setMessageKey(payloadMessage.getKey());
+                entry.setMessageParams(payloadMessage.getParams());
+                entry.setMessageFallback(payloadMessage.getFallback());
+            }
+            game.addLog(entry);
+            gameStore.saveGame(game);
+            systemOutService.action(game, action.playerId(), action.actionType(), loggedTargetId, action.targetId2(), resultMessage);
+        } catch (Exception logEx) {
+            systemOutService.error("ACTION_LOG_FAILED", "Failed to write game log: " + logEx.getMessage());
+        }
+    }
+
+    private Object messagePayloadFor(String actionType, GameState game, String fallback) {
+        if (fallback == null) return null;
+        if (("CHEN_ACTION".equals(actionType) || "SALTED_FISH_STAB".equals(actionType))
+                && game != null && game.getPublicMessage() instanceof MessagePayload payload) {
+            return payload;
+        }
+        if ("CHEN_SKIP".equals(actionType)) {
+            return MessagePayload.of("backend.chen.skipped", fallback);
+        }
+        if ("SALTED_FISH_SKIP".equals(actionType)) {
+            return MessagePayload.of("backend.saltedFish.skipped", fallback);
+        }
+        if ("Ability activated.".equals(fallback)) {
+            return MessagePayload.of("backend.action.abilityActivated", fallback);
+        }
+        return MessagePayload.of("backend.raw", Map.of("text", fallback), fallback);
     }
     private Role roleForAction(String actionType) {
         if (actionType == null) return null;
@@ -236,7 +143,7 @@ public class ActionController {
 
                 return ResponseEntity.ok(gameStore.getGame(roomId));
             } catch (Exception e) {
-                return ResponseEntity.badRequest().body(e.getMessage());
+                return ControllerResponses.badRequest(e);
             }
         }
     @GetMapping("/{roomId}/phase")
@@ -245,7 +152,7 @@ public class ActionController {
 
                 GameState game = gameStore.getGame(roomId);
                 if (game == null) {
-                    return ResponseEntity.badRequest().body("Game not found for room: " + roomId);
+                    return ResponseEntity.badRequest().body(Map.of("message", MessagePayload.of("backend.game.notFoundForRoom", Map.of("roomId", roomId), "Game not found for room: " + roomId)));
                 }
 
 
@@ -258,7 +165,7 @@ public class ActionController {
                 return ResponseEntity.ok(phaseInfo);
 
             } catch (Exception e) {
-                return ResponseEntity.badRequest().body(e.getMessage());
+                return ControllerResponses.badRequest(e);
             }
         }
 }

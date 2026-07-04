@@ -5,6 +5,7 @@ import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.model.PlayerState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.store.GameStore;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,7 @@ public class BotService {
     private final GameHelperService gameHelper;
     private final GameLogService gameLogService;
     private final SystemOutService systemOutService;
+    private final Random random = new Random();
 
     public BotService(GameStore gameStore, NightService nightService, DayService dayService, GameHelperService gameHelper, GameLogService gameLogService, SystemOutService systemOutService) {
         this.gameStore = gameStore;
@@ -39,14 +41,13 @@ public class BotService {
         List<PlayerState> alivePlayers = game.getPlayers().stream().filter(PlayerState::isAlive).toList();
         if (alivePlayers.isEmpty()) return;
 
-        Random rand = new Random();
-        java.util.function.Supplier<Long> randomTarget = () -> alivePlayers.get(rand.nextInt(alivePlayers.size())).getUserId();
+        java.util.function.Supplier<Long> randomTarget = () -> alivePlayers.get(random.nextInt(alivePlayers.size())).getUserId();
         java.util.function.Function<Long, Long> randomOtherTarget = actorId -> {
             List<PlayerState> candidates = alivePlayers.stream()
                     .filter(player -> !player.getUserId().equals(actorId))
                     .toList();
             if (candidates.isEmpty()) return null;
-            return candidates.get(rand.nextInt(candidates.size())).getUserId();
+            return candidates.get(random.nextInt(candidates.size())).getUserId();
         };
 
         switch (phase) {
@@ -198,7 +199,7 @@ public class BotService {
                 break;
             case DAY_START:
                 dayService.startVotingPhase(roomId);
-                gameLogService.append(game, null, "START_NOMINATION", null, null, "Bot auto started nomination.");
+                gameLogService.appendPayload(game, null, "START_NOMINATION", null, null, MessagePayload.of("backend.bot.startNomination", "Bot auto started nomination."));
                 break;
             case NOMINATION:
                 autoVoteAllBots(roomId, humanPlayerId, GamePhase.NOMINATION, "NOMINATE", randomTarget);
@@ -278,3 +279,6 @@ public class BotService {
 
     private record BotActionLog(String actionType, Long targetId, Long targetId2, String message) {}
 }
+
+
+

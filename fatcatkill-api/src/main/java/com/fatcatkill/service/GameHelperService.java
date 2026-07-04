@@ -3,6 +3,7 @@ package com.fatcatkill.service;
 import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
+import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.store.GameStore;
 import com.fatcatkill.enums.Role;
@@ -32,14 +33,14 @@ public class GameHelperService {
     public GameState validateAndGetGame(String roomId, GamePhase... allowedPhases) {
         GameState game = gameStore.getGame(roomId);
         if (game == null || game.getStatus() != RoomStatus.PLAYING) {
-            throw new IllegalStateException("遊戲未開始");
+            throw localized("backend.game.notActive", "Game is not active.");
         }
         boolean phaseValid = false;
         for (GamePhase phase : allowedPhases) {
             if (game.getCurrentPhase() == phase) phaseValid = true;
         }
         if (!phaseValid) {
-            throw new IllegalStateException("當前階段不允許此行動");
+            throw localized("backend.game.phaseNotAllowed", "Current phase does not allow this action.");
         }
         return game;
     }
@@ -52,10 +53,10 @@ public class GameHelperService {
         PlayerState p = game.getPlayers().stream()
                 .filter(player -> player.getUserId().equals(playerId))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("找不到玩家 ID: " + playerId));
+                .orElseThrow(() -> localized("backend.player.notFound", Map.of("playerId", playerId), "Player not found: " + playerId + "."));
 
         if (!p.isAlive()) {
-            throw new IllegalStateException("玩家 " + playerId + " 已死亡，無法被選定或執行動作！");
+            throw localized("backend.player.deadTargetOrActor", Map.of("playerId", playerId), "Player " + playerId + " is dead and cannot be selected or act.");
         }
         return p;
     }
@@ -176,10 +177,10 @@ public class GameHelperService {
         PlayerState p = game.getPlayers().stream()
                 .filter(player -> player.getUserId().equals(playerId))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("找不到玩家 ID: " + playerId));
+                .orElseThrow(() -> localized("backend.player.notFound", Map.of("playerId", playerId), "Player not found: " + playerId + "."));
 
         if (!p.isAlive()) {
-            throw new IllegalStateException("玩家 " + playerId + " 已死亡，無法執行動作！");
+            throw localized("backend.player.deadActor", Map.of("playerId", playerId), "Player " + playerId + " is dead and cannot act.");
         }
         return p;
     }
@@ -190,7 +191,7 @@ public class GameHelperService {
     public PlayerState validateAndGetPlayer(GameState game, Long playerId, Role expectedRole) {
         PlayerState player = validateAlive(game, playerId);
         if (player.getRole() != expectedRole) {
-            throw new IllegalArgumentException("玩家身分不符，預期角色: " + expectedRole);
+            throw localized("backend.player.roleMismatch", Map.of("role", expectedRole.name()), "Player role mismatch. Expected role: " + expectedRole + ".");
         }
         return player;
     }
@@ -200,7 +201,7 @@ public class GameHelperService {
     public PlayerState validateAndGetEffectivePlayer(GameState game, Long playerId, Role expectedRole) {
         PlayerState player = validateAlive(game, playerId);
         if (!canActAs(game, player, expectedRole)) {
-            throw new IllegalArgumentException("Player cannot act as " + expectedRole);
+            throw localized("backend.player.cannotActAs", Map.of("role", expectedRole.name()), "Player cannot act as " + expectedRole + ".");
         }
         return player;
     }
@@ -372,7 +373,7 @@ public class GameHelperService {
     public PlayerState validateVotingPlayer(GameState game, Long playerId) {
         PlayerState player = getPlayer(game, playerId);
         if (!isVoteEligible(game, player)) {
-            throw new IllegalStateException("Player is not eligible to vote.");
+            throw localized("backend.vote.notEligible", "Player is not eligible to vote.");
         }
         return player;
     }
@@ -519,7 +520,14 @@ public class GameHelperService {
         return game.getPlayers().stream()
                 .filter(player -> player.getUserId().equals(playerId))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("找不到玩家 ID: " + playerId));
+                .orElseThrow(() -> localized("backend.player.notFound", Map.of("playerId", playerId), "Player not found: " + playerId + "."));
     }
     
+    private LocalizedGameException localized(String key, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, fallback));
+    }
+
+    private LocalizedGameException localized(String key, Map<String, Object> params, String fallback) {
+        return new LocalizedGameException(MessagePayload.of(key, params, fallback));
+    }
 }
