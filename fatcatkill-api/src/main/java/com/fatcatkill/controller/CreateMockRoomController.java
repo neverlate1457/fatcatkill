@@ -7,6 +7,7 @@ import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.repository.UserRepository;
 import com.fatcatkill.service.GameLogService;
 import com.fatcatkill.store.GameStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,29 +24,42 @@ public class CreateMockRoomController {
     private final GameStore gameStore;
     private final GameLogService gameLogService;
     private final UserRepository userRepository;
+    private final boolean debugActionsEnabled;
 
-    public CreateMockRoomController(GameStore gameStore, GameLogService gameLogService, UserRepository userRepository) {
+    public CreateMockRoomController(
+            GameStore gameStore,
+            GameLogService gameLogService,
+            UserRepository userRepository,
+            @Value("${fatcatkill.debug-actions:false}") boolean debugActionsEnabled
+    ) {
         this.gameStore = gameStore;
         this.gameLogService = gameLogService;
         this.userRepository = userRepository;
+        this.debugActionsEnabled = debugActionsEnabled;
     }
 
-    // 新增參數 ?count=10，如果沒傳預設就是 6 人
     @PostMapping("/mock/{roomId}")
-    public ResponseEntity<GameState> execute(
-            @PathVariable String roomId, 
+    public ResponseEntity<?> execute(
+            @PathVariable String roomId,
             @RequestParam(defaultValue = "6") int count) {
-            
+        if (!debugActionsEnabled) {
+            return ControllerResponses.badRequest(MessagePayload.of("backend.debug.disabled", "Debug actions are disabled."));
+        }
+        GameState existingGame = gameStore.getGame(roomId);
+        if (existingGame != null && existingGame.getStatus() != RoomStatus.WAITING) {
+            return ControllerResponses.badRequest(MessagePayload.of("backend.room.notReady", "Room does not exist or the game is already in progress."));
+        }
+
         GameState gameState = new GameState();
         gameState.setRoomId(roomId);
         gameState.setStatus(RoomStatus.WAITING);
         List<PlayerState> players = new ArrayList<>();
-        
-        // 根據傳入的 count 決定塞幾隻胖貓
+
         for (long i = 1; i <= count; i++) {
             PlayerState player = new PlayerState();
             player.setUserId(i);
-            player.setUsername("胖貓測試員_" + i); // ⬅️ 這裡修復了：加上了 set
+            player.setUsername("胖貓測試員_" + i);
+            player.setBot(true);
             players.add(player);
         }
         gameState.setPlayers(players);
@@ -55,10 +69,14 @@ public class CreateMockRoomController {
     }
 
     @PostMapping("/fill-bots/{roomId}")
-    public ResponseEntity<GameState> fillBots(
+    public ResponseEntity<?> fillBots(
             @PathVariable String roomId,
             @RequestParam(defaultValue = "6") int count,
             @RequestBody(required = false) Map<String, Object> payload) {
+        GameState existingGame = gameStore.getGame(roomId);
+        if (existingGame != null && existingGame.getStatus() != RoomStatus.WAITING) {
+            return ControllerResponses.badRequest(MessagePayload.of("backend.room.notReady", "Room does not exist or the game is already in progress."));
+        }
 
         GameState gameState = new GameState();
         gameState.setRoomId(roomId);
@@ -112,6 +130,7 @@ public class CreateMockRoomController {
             PlayerState bot = new PlayerState();
             bot.setUserId(nextBotId);
             bot.setUsername("Bot " + nextBotId);
+            bot.setBot(true);
             players.add(bot);
             usedIds.add(nextBotId);
             nextBotId++;

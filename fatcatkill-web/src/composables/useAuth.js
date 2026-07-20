@@ -28,7 +28,7 @@ export const useAuth = ({
 
     if (!username || !password) {
       showActionError('backend.auth.usernamePasswordRequired')
-      return
+      return false
     }
 
     try {
@@ -41,13 +41,15 @@ export const useAuth = ({
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
         showActionError(data?.message || data || fallback, fallback)
-        return
+        return false
       }
       saveAuthUser(data)
       authPassword.value = ''
       clearActionError()
+      return true
     } catch (error) {
       showActionError(error, fallback)
+      return false
     }
   }
   const logoutAuth = () => {
@@ -69,6 +71,7 @@ export const useAuth = ({
     authUsername.value = guest.username
     authPassword.value = ''
     clearActionError()
+    return true
   }
 
   const requireLogin = () => {

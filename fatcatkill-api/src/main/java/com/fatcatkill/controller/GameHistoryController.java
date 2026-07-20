@@ -11,7 +11,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.ObjectMapper;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -19,10 +21,12 @@ import java.util.Map;
 public class GameHistoryController {
     private final GameRecordRepository gameRecordRepository;
     private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
 
-    public GameHistoryController(GameRecordRepository gameRecordRepository, UserRepository userRepository) {
+    public GameHistoryController(GameRecordRepository gameRecordRepository, UserRepository userRepository, ObjectMapper objectMapper) {
         this.gameRecordRepository = gameRecordRepository;
         this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
     }
 
     @GetMapping
@@ -52,7 +56,7 @@ public class GameHistoryController {
                 .filter(record -> includesParticipant(record, accountId))
                 .<ResponseEntity<?>>map(record -> ResponseEntity.ok(Map.of(
                         "summary", summary(record),
-                        "finalState", record.getFinalStateJson()
+                        "finalState", sanitizedFinalState(record.getFinalStateJson())
                 )))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
@@ -78,10 +82,35 @@ public class GameHistoryController {
         return false;
     }
 
+    private String sanitizedFinalState(String finalStateJson) {
+        if (finalStateJson == null || finalStateJson.isBlank()) return "";
+        try {
+            Object value = objectMapper.readValue(finalStateJson, Object.class);
+            stripSensitiveFields(value);
+            return objectMapper.writeValueAsString(value);
+        } catch (RuntimeException ex) {
+            return "";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stripSensitiveFields(Object value) {
+        if (value instanceof Map<?, ?> rawMap) {
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            map.remove("accountId");
+            map.remove("sessionToken");
+            for (Object child : map.values()) {
+                stripSensitiveFields(child);
+            }
+        } else if (value instanceof List<?> list) {
+            for (Object child : list) {
+                stripSensitiveFields(child);
+            }
+        }
+    }
+
     private ResponseEntity<?> unauthorized() {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
-                "message", MessagePayload.of("backend.auth.unauthorized", "Please login again.")
-        ));
+        return ControllerResponses.status(HttpStatus.UNAUTHORIZED, MessagePayload.of("backend.auth.unauthorized", "Please login again."));
     }
 
     private Map<String, Object> summary(GameRecord record) {

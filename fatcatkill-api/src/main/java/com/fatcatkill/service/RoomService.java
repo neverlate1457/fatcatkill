@@ -206,7 +206,23 @@ public class RoomService {
         if (customDeck.stream().filter(role -> role == Role.FATCAT).count() != 1) {
             throw localized("backend.room.customDeckFatcatCount", "Custom deck must contain exactly one Fatcat.");
         }
+        Role unsupportedRole = customDeck.stream()
+                .filter(role -> !isOldHomeRole(role))
+                .findFirst()
+                .orElse(null);
+        if (unsupportedRole != null) {
+            throw localized("backend.room.customDeckUnsupportedRole", Map.of("role", unsupportedRole.name()), "Custom deck contains an unsupported role: " + unsupportedRole.name() + ".");
+        }
         return new ArrayList<>(customDeck);
+    }
+
+    private boolean isOldHomeRole(Role role) {
+        return role == Role.FATCAT
+                || isVolunteerRole(role)
+                || List.of(Role.HIGH_RABBIT, Role.MEATBUN, Role.MUBAIMU, Role.CHEN,
+                Role.XIAOEN, Role.NUKO, Role.SHUSHU, Role.BARK_KING,
+                Role.LIVER_INDEX, Role.PINK_RABBIT, Role.EMPEROR, Role.NTHU_MATH,
+                Role.MAGIC_MEOW, Role.PH_SERVICE, Role.RAT_MAN).contains(role);
     }
 
     private void validateHostSettings(GameState gameState, List<Role> fatcatHintRoles, Role highRabbitRole) {

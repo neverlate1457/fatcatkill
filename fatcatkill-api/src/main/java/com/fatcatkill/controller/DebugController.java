@@ -6,8 +6,8 @@ import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.model.PlayerState;
 import com.fatcatkill.model.MessagePayload;
+import com.fatcatkill.model.InvalidGameActionPayloadException;
 import com.fatcatkill.service.GameLogService;
-import com.fatcatkill.service.NightService;
 import com.fatcatkill.store.GameStore;
 import org.springframework.http.ResponseEntity;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -39,26 +39,23 @@ import java.util.Set;
 public class DebugController {
 
     private final GameStore gameStore;
-    private final NightService nightService;
     private final ObjectMapper objectMapper;
     private final GameLogService gameLogService;
 
-    public DebugController(GameStore gameStore, NightService nightService, ObjectMapper objectMapper, GameLogService gameLogService) {
+    public DebugController(GameStore gameStore, ObjectMapper objectMapper, GameLogService gameLogService) {
         this.gameStore = gameStore;
-        this.nightService = nightService;
         this.objectMapper = objectMapper;
         this.gameLogService = gameLogService;
     }
 
     @PostMapping("/setRole")
-    public ResponseEntity<?> setRole(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> setRole(@RequestBody(required = false) Map<String, Object> payload) {
         try {
-            String roomId = (String) payload.get("roomId");
-            Long userId = ((Number) payload.get("userId")).longValue();
-            String roleName = (String) payload.get("role");
-            String phase = payload.containsKey("phase") && payload.get("phase") != null
-                    ? (String) payload.get("phase")
-                    : null;
+            requirePayload(payload);
+            String roomId = requiredString(payload.get("roomId"), "roomId");
+            Long userId = requiredLong(payload.get("userId"), "userId");
+            String roleName = requiredString(payload.get("role"), "role");
+            String phase = optionalString(payload.get("phase"));
 
             GameState game = gameStore.getGame(roomId);
             if (game == null) return roomNotFound(roomId);
@@ -77,11 +74,11 @@ public class DebugController {
             }
 
             if (payload.containsKey("status") && payload.get("status") != null) {
-                game.setStatus(RoomStatus.valueOf((String) payload.get("status")));
+                game.setStatus(RoomStatus.valueOf(requiredString(payload.get("status"), "status")));
             }
 
             if (payload.containsKey("lastExiledPlayerId") && payload.get("lastExiledPlayerId") != null) {
-                Long exiledId = ((Number) payload.get("lastExiledPlayerId")).longValue();
+                Long exiledId = requiredLong(payload.get("lastExiledPlayerId"), "lastExiledPlayerId");
                 game.setLastExiledPlayerId(exiledId);
             }
 
@@ -94,10 +91,11 @@ public class DebugController {
     }
 
     @PostMapping("/force/acCat")
-    public ResponseEntity<?> forceAcCat(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> forceAcCat(@RequestBody(required = false) Map<String, Object> payload) {
         try {
-            String roomId = (String) payload.get("roomId");
-            Long playerId = ((Number) payload.get("playerId")).longValue();
+            requirePayload(payload);
+            String roomId = requiredString(payload.get("roomId"), "roomId");
+            Long playerId = requiredLong(payload.get("playerId"), "playerId");
             GameState game = gameStore.getGame(roomId);
             if (game == null) return roomNotFound(roomId);
 
@@ -128,10 +126,11 @@ public class DebugController {
     }
 
     @PostMapping("/force/xiangxiang")
-    public ResponseEntity<?> forceXiang(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> forceXiang(@RequestBody(required = false) Map<String, Object> payload) {
         try {
-            String roomId = (String) payload.get("roomId");
-            Long playerId = ((Number) payload.get("playerId")).longValue();
+            requirePayload(payload);
+            String roomId = requiredString(payload.get("roomId"), "roomId");
+            Long playerId = requiredLong(payload.get("playerId"), "playerId");
             GameState game = gameStore.getGame(roomId);
             if (game == null) return roomNotFound(roomId);
 
@@ -293,6 +292,40 @@ public class DebugController {
                     "Failed to export logs."
             ));
         }
+    }
+
+    private void requirePayload(Map<String, Object> payload) {
+        if (payload == null) {
+            throw new InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingPayload", "Missing action payload.")
+            );
+        }
+    }
+
+    private String requiredString(Object value, String fieldName) {
+        String text = optionalString(value);
+        if (text == null || text.isBlank()) {
+            throw new InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".")
+            );
+        }
+        return text;
+    }
+
+    private String optionalString(Object value) {
+        return value == null ? null : String.valueOf(value).trim();
+    }
+
+    private Long requiredLong(Object value, String fieldName) {
+        if (value == null) {
+            throw new InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".")
+            );
+        }
+        if (value instanceof Number number) return number.longValue();
+        throw new InvalidGameActionPayloadException(
+                MessagePayload.of("backend.action.expectedNumericId", Map.of("field", fieldName), "Expected numeric id for " + fieldName + ".")
+        );
     }
 
     private List<Map<String, Object>> buildPlayerSnapshot(GameState game) {

@@ -25,7 +25,6 @@ const props = defineProps({
   canUseChenAction: { type: Boolean, default: false },
   canUseSaltedFishAction: { type: Boolean, default: false },
   isRoomHost: { type: Boolean, default: false },
-  debugMode: { type: Boolean, default: false },
   botActionButtonText: { type: String, default: '' },
   canUseFatcatTeamHint: { type: Boolean, default: false },
   fatcatHintButtonText: { type: String, default: '' },
@@ -53,8 +52,6 @@ const emit = defineEmits([
   'shushu-click',
   'methane-click',
   'mochi-boss-check',
-  'witch-action',
-  'seer-verify',
   'chen-action',
   'fish-action',
   'day-vote',
@@ -187,28 +184,28 @@ const emit = defineEmits([
         class="action-button danger"
         @click="emit('fatcat-kill', player.userId)"
       >
-        Kill
+        {{ t('action.kill') }}
       </button>
       <button
         v-if="canActAsRole('LIVER_INDEX') && phase === 'LIVER_INDEX_ACTION'"
         class="action-button"
         @click="emit('liver-action', player.userId)"
       >
-        Debuff
+        {{ t('action.debuff') }}
       </button>
       <button
         v-if="canActAsRole('CAN_MAN') && phase === 'CAN_MAN_ACTION'"
         class="action-button"
         @click="emit('can-man-action', player.userId)"
       >
-        Drink
+        {{ t('action.drink') }}
       </button>
       <button
         v-if="canActAsRole('NANGONG') && phase === 'NANGONG_ACTION'"
         class="action-button"
         @click="emit('nangong-action', player.userId)"
       >
-        Bind
+        {{ t('action.bind') }}
       </button>
       <button
         v-if="canActAsRole('MUBAIMU') && phase === 'MUBAIMU_ACTION'"
@@ -238,17 +235,6 @@ const emit = defineEmits([
       >
         {{ t('action.checkFatcat') }}
       </button>
-      <template v-if="myPlayer?.role === 'WITCH' && phase === 'WITCH_ACTION'">
-        <button class="action-button success" @click="emit('witch-action', player.userId, 'SAVE')">{{ t('action.save') }}</button>
-        <button class="action-button danger" @click="emit('witch-action', player.userId, 'POISON')">{{ t('action.poison') }}</button>
-      </template>
-      <button
-        v-if="myPlayer?.role === 'SEER' && phase === 'SEER_VERIFY'"
-        class="action-button"
-        @click="emit('seer-verify', player.userId)"
-      >
-        {{ t('action.verify') }}
-      </button>
       <button
         v-if="canUseChenAction"
         class="action-button danger"
@@ -275,7 +261,7 @@ const emit = defineEmits([
 </section>
 
   <section class="global-actions">
-  <button v-if="debugMode && gameState.status === 'PLAYING' && isRoomHost" class="secondary-button" @click="emit('auto-play-bot')">
+  <button v-if="gameState.status === 'PLAYING' && isRoomHost" class="secondary-button" @click="emit('auto-play-bot')">
     {{ botActionButtonText }}
   </button>
   <button v-if="canUseFatcatTeamHint" class="action-button" @click="emit('fatcat-team-hint')">
@@ -328,9 +314,6 @@ const emit = defineEmits([
   <button v-if="canActAsRole('ANDY') && phase === 'ANDY_ACTION'" class="action-button" @click="emit('andy-action')">
     {{ t('action.findCloud') }}
   </button>
-  <button v-if="myPlayer?.role === 'WITCH' && phase === 'WITCH_ACTION'" class="action-button" @click="emit('witch-action', myPlayer.userId, 'SKIP')">
-    {{ t('action.witchSkip') }}
-  </button>
   <button v-if="canUseChenAction" class="secondary-button" @click="emit('chen-skip')">
     {{ t('action.skipChen') }}
   </button>
@@ -345,5 +328,3 @@ const emit = defineEmits([
   </button>
 </section>
 </template>
-
-

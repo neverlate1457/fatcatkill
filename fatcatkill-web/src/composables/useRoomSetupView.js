@@ -1,4 +1,4 @@
-﻿import { computed, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { botNamePrefixes, methaneExcludedTargetRoles } from '../config/appConfig'
 import { volunteerRoleOptions } from '../data/roles'
 import { t } from '../i18n'
@@ -66,6 +66,7 @@ export const useRoomSetupView = ({
   })
 
   const isBotRoomPlayer = (player) => {
+    if (player?.bot === true) return true
     const name = player?.username || player?.nickname || ''
     return botNamePrefixes.some((prefix) => name.startsWith(prefix))
   }

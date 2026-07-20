@@ -1,5 +1,6 @@
 import { t } from '../i18n'
 import { downloadJson } from '../utils/downloadJson'
+import { parseHistoryFinalState } from '../utils/historyState'
 
 export const historyWinnerText = (winnerCamp) => {
   if (winnerCamp === 'WOLF') return t('history.fatcatWin')
@@ -12,6 +13,7 @@ export const historyTimeText = (value) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
+
 
 export const useGameHistory = ({ gatewayUrl, authUser, isLoggedIn, historyLoading, historyRecords, showActionError, clearActionError }) => {
   const historyHeaders = () => {
@@ -53,7 +55,7 @@ export const useGameHistory = ({ gatewayUrl, authUser, isLoggedIn, historyLoadin
       const response = await fetch(`${gatewayUrl}/history/${encodeURIComponent(record.gameId)}`, { headers })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw data.message || new Error(t('error.downloadHistory'))
-      const parsedState = typeof data.finalState === 'string' ? JSON.parse(data.finalState) : data.finalState
+      const parsedState = parseHistoryFinalState(data.finalState)
       downloadJson({ ...data.summary, finalState: parsedState }, `fatcatkill_history_${record.roomId}_${record.gameId}.json`)
       clearActionError()
     } catch (error) {

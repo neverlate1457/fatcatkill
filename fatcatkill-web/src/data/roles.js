@@ -1,12 +1,6 @@
 import { t } from '../i18n'
 
 export const roleCodes = [
-  'WEREWOLF',
-  'VILLAGER',
-  'SEER',
-  'WITCH',
-  'HUNTER',
-  'GUARD',
   'METHANE',
   'GUOGUO',
   'XIANGXIANG',
@@ -54,8 +48,7 @@ export const fatcatHorcruxRoles = new Set([
   'RAT_MAN'
 ])
 
-export const customRoleOptions = roleCodes
-  .filter((role) => !['WEREWOLF', 'VILLAGER', 'SEER', 'WITCH', 'HUNTER', 'GUARD'].includes(role))
+export const customRoleOptions = [...roleCodes]
 
 export const volunteerRoleOptions = [
   'METHANE',

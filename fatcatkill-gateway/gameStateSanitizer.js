@@ -27,11 +27,19 @@ const hasFullObserverAccess = (gameState, viewerId, spectator = false) => {
   return Boolean(viewer && viewer.alive === false && gameState.status !== 'WAITING');
 };
 
+const stripSensitiveFields = (gameState) => {
+  if (!gameState || typeof gameState !== 'object') return gameState;
+  if (Array.isArray(gameState.players)) {
+    gameState.players = gameState.players.map(({ accountId, sessionToken, ...player }) => player);
+  }
+  return gameState;
+};
+
 const sanitizeGameState = (gameState, viewerId, spectator = false) => {
   if (!gameState || typeof gameState !== 'object') return gameState;
 
   const sanitized = JSON.parse(JSON.stringify(gameState));
-  if (hasFullObserverAccess(sanitized, viewerId, spectator)) return sanitized;
+  if (hasFullObserverAccess(sanitized, viewerId, spectator)) return stripSensitiveFields(sanitized);
   const normalizedViewerId = viewerId == null ? null : String(viewerId);
   const viewer = sanitized.players?.find((player) => String(player.userId) === normalizedViewerId);
   const actualPhase = sanitized.currentPhase;
@@ -71,6 +79,7 @@ const sanitizeGameState = (gameState, viewerId, spectator = false) => {
   sanitized.delayedDeathRounds = {};
   sanitized.mubaimuDoomRounds = {};
   sanitized.barkKingDoomRounds = {};
+  sanitized.drunkUntilRounds = {};
   sanitized.logs = [];
   sanitized.strOriginalSeatNumbers = {};
   sanitized.strTemporarySeatNumbers = {};
@@ -81,6 +90,8 @@ const sanitizeGameState = (gameState, viewerId, spectator = false) => {
   sanitized.chenSkippedRounds = {};
   sanitized.saltedFishUsedPlayerIds = [];
   sanitized.saltedFishSkippedRounds = {};
+  sanitized.nangongUsedPlayerIds = [];
+  sanitized.xiaoenRedirectRound = null;
 
   const ownKey = normalizedViewerId;
   sanitized.privateMessages = ownKey && sanitized.privateMessages?.[ownKey]
@@ -93,16 +104,18 @@ const sanitizeGameState = (gameState, viewerId, spectator = false) => {
   sanitized.ratManCheckerIds = viewer?.role === 'RAT_MAN' ? sanitized.ratManCheckerIds : [];
   sanitized.hostConfiguredFatcatHintRoles = null;
   sanitized.hostConfiguredHighRabbitRole = null;
+  sanitized.hostConfiguredMethaneHallucinationTargetId = null;
   sanitized.fatcatKillerPlayerId = String(sanitized.fatcatKillerPlayerId) === normalizedViewerId
     ? sanitized.fatcatKillerPlayerId
     : null;
 
-  return sanitized;
+  return stripSensitiveFields(sanitized);
 };
 
 module.exports = {
   PUBLIC_PHASES,
   PHASE_ACTOR_ROLES,
   hasFullObserverAccess,
+  stripSensitiveFields,
   sanitizeGameState
 };

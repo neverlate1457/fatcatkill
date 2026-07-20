@@ -1,3 +1,5 @@
+const messagePayload = (key, params = {}, fallback = key) => ({ key, params, fallback });
+
 const authHeaders = (req) => {
   const headers = {};
   const userId = req.get('x-user-id');
@@ -8,9 +10,9 @@ const authHeaders = (req) => {
 };
 
 const registerHttpProxyRoutes = (app, axios, backendUrl) => {
-  const forwardError = (res, error, fallbackMessage) => {
+  const forwardError = (res, error, key, fallback) => {
     const status = error.response?.status || 500;
-    res.status(status).json(error.response?.data || { message: fallbackMessage });
+    res.status(status).json(error.response?.data || { message: messagePayload(key, {}, fallback) });
   };
 
   app.post('/auth/register', async (req, res) => {
@@ -18,7 +20,7 @@ const registerHttpProxyRoutes = (app, axios, backendUrl) => {
       const response = await axios.post(`${backendUrl}/auth/register`, req.body || {});
       res.status(response.status).json(response.data);
     } catch (error) {
-      forwardError(res, error, 'Registration failed.');
+      forwardError(res, error, 'gateway.auth.registrationFailed', 'Registration failed.');
     }
   });
 
@@ -27,7 +29,7 @@ const registerHttpProxyRoutes = (app, axios, backendUrl) => {
       const response = await axios.post(`${backendUrl}/auth/login`, req.body || {});
       res.status(response.status).json(response.data);
     } catch (error) {
-      forwardError(res, error, 'Login failed.');
+      forwardError(res, error, 'gateway.auth.loginFailed', 'Login failed.');
     }
   });
 
@@ -36,7 +38,7 @@ const registerHttpProxyRoutes = (app, axios, backendUrl) => {
       const response = await axios.get(`${backendUrl}/history`, { headers: authHeaders(req) });
       res.status(response.status).json(response.data);
     } catch (error) {
-      forwardError(res, error, 'Failed to load game history.');
+      forwardError(res, error, 'gateway.history.loadFailed', 'Failed to load game history.');
     }
   });
 
@@ -45,7 +47,7 @@ const registerHttpProxyRoutes = (app, axios, backendUrl) => {
       const response = await axios.get(`${backendUrl}/history/${encodeURIComponent(req.params.gameId)}`, { headers: authHeaders(req) });
       res.status(response.status).json(response.data);
     } catch (error) {
-      forwardError(res, error, 'Failed to load game history.');
+      forwardError(res, error, 'gateway.history.loadFailed', 'Failed to load game history.');
     }
   });
 };

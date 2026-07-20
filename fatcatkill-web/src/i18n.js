@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { translations } from './locales'
+import { translations } from './locales/index.js'
 
 const LANGUAGE_KEY = 'fatcatkill.language'
 
@@ -8,7 +8,8 @@ export const languages = [
   { code: 'en', labelKey: 'language.en' }
 ]
 
-const savedLanguage = window.localStorage.getItem(LANGUAGE_KEY)
+const localStorageRef = globalThis.window?.localStorage || globalThis.localStorage || null
+const savedLanguage = localStorageRef?.getItem(LANGUAGE_KEY)
 export const currentLanguage = ref(languages.some((item) => item.code === savedLanguage) ? savedLanguage : 'zh-TW')
 
 const applyParams = (text, params = {}) => String(text).replace(/\{(\w+)\}/g, (_, key) => params[key] ?? `{${key}}`)
@@ -16,7 +17,7 @@ const applyParams = (text, params = {}) => String(text).replace(/\{(\w+)\}/g, (_
 export const setLanguage = (language) => {
   if (!languages.some((item) => item.code === language)) return
   currentLanguage.value = language
-  window.localStorage.setItem(LANGUAGE_KEY, language)
+  localStorageRef?.setItem(LANGUAGE_KEY, language)
 }
 
 export const t = (key, params = {}, fallback = key) => {

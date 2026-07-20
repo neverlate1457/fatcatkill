@@ -1,5 +1,6 @@
 package com.fatcatkill.service;
 
+import com.fatcatkill.enums.Camp;
 import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.enums.RoomStatus;
@@ -135,6 +136,9 @@ public class DayService {
         }
 
         if (gameState.getCurrentPhase() == GamePhase.NOMINATION && triggerKbNominationTrap(gameState, voter, target)) {
+            if (gameState.getCurrentPhase() != GamePhase.GAME_OVER) {
+                tallyVotesIfEveryoneConfirmed(gameState);
+            }
             gameStore.saveGame(gameState);
             return;
         }
@@ -337,8 +341,7 @@ public class DayService {
                 gameState.setLastVoteResult(MessagePayload.of("backend.day.exiled",
                         Map.of("playerId", nominatedPlayerId, "votes", yesVotes, "majority", majority),
                         "Player " + nominatedPlayerId + " was exiled with " + yesVotes + "/" + majority + " required yes votes."));
-                gameState.setCurrentPhase(GamePhase.GAME_OVER);
-                gameState.setStatus(RoomStatus.FINISHED);
+                gameHelper.finishGame(gameState, Camp.WOLF);
                 clearDayVotingState(gameState);
                 gameState.getFinalVoteEligiblePlayerIds().clear();
                 return;
@@ -392,7 +395,7 @@ public class DayService {
         if (gameHelper.isVolunteerArmy(nominator.getRole()) || nominator.getRole() == Role.MEATBUN) {
             gameHelper.setDead(gameState, nominator.getUserId());
             nominator.setVotedTargetId(null);
-            nominator.setVoteConfirmed(false);
+            nominator.setVoteConfirmed(true);
             checkImmediateWinOnly(gameState);
             return true;
         }
@@ -430,11 +433,9 @@ public class DayService {
         long aliveVolunteerFaction = gameHelper.countAliveVolunteerFaction(gameState);
 
         if (aliveFatcats == 0) {
-            gameState.setCurrentPhase(GamePhase.GAME_OVER);
-            gameState.setStatus(RoomStatus.FINISHED);
+            gameHelper.finishGame(gameState, Camp.VILLAGER);
         } else if (aliveVolunteerFaction < 3) {
-            gameState.setCurrentPhase(GamePhase.GAME_OVER);
-            gameState.setStatus(RoomStatus.FINISHED);
+            gameHelper.finishGame(gameState, Camp.WOLF);
         } else {
             moveToNextPhase(gameState);
         }
@@ -447,9 +448,10 @@ public class DayService {
 
         long aliveVolunteerFaction = gameHelper.countAliveVolunteerFaction(gameState);
 
-        if (aliveFatcats == 0 || aliveVolunteerFaction < 3) {
-            gameState.setCurrentPhase(GamePhase.GAME_OVER);
-            gameState.setStatus(RoomStatus.FINISHED);
+        if (aliveFatcats == 0) {
+            gameHelper.finishGame(gameState, Camp.VILLAGER);
+        } else if (aliveVolunteerFaction < 3) {
+            gameHelper.finishGame(gameState, Camp.WOLF);
         }
     }
 
@@ -566,8 +568,3 @@ public class DayService {
         return new LocalizedGameException(MessagePayload.of(key, fallback));
     }
 }
-
-
-
-
-

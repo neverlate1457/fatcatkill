@@ -4,7 +4,7 @@ public enum GamePhase {
     WAITING,
     STR_ACTION,
     PH_SERVICE_ACTION,
-    NIGHT_START,         // 夜晚開始 (肥貓殺人回合)
+    NIGHT_START,         // 夜晚開始，肥貓行動回合
     GUOGUO_ACTION,
     FORVKUSA_ACTION,
     HATONG_ACTION,
@@ -18,7 +18,7 @@ public enum GamePhase {
     CAN_MAN_ACTION,      // 罐頭行動
     NANGONG_ACTION,
     ANDY_ACTION,
-    METHANE_ACTION,      // 🔥 甲烷行動
+    METHANE_ACTION,      // 甲烷行動
     MOCHI_BOSS_ACTION,
     DAY_START,
     NOMINATION,

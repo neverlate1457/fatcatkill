@@ -9,7 +9,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class CorsConfig implements WebMvcConfigurer {
     private final String allowedOrigins;
 
-    public CorsConfig(@Value("${fatcatkill.allowed-origins:*}") String allowedOrigins) {
+    public CorsConfig(@Value("${fatcatkill.allowed-origins:http://localhost:5173}") String allowedOrigins) {
         this.allowedOrigins = allowedOrigins;
     }
 
@@ -22,7 +22,7 @@ public class CorsConfig implements WebMvcConfigurer {
     }
 
     private String[] parseOrigins() {
-        if (allowedOrigins == null || allowedOrigins.isBlank()) return new String[] { "*" };
+        if (allowedOrigins == null || allowedOrigins.isBlank()) return new String[] { "http://localhost:5173" };
         return java.util.Arrays.stream(allowedOrigins.split(","))
                 .map(String::trim)
                 .filter(origin -> !origin.isBlank())

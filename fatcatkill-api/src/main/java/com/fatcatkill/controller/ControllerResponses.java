@@ -2,6 +2,7 @@ package com.fatcatkill.controller;
 
 import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.model.MessagePayloadException;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 
 import java.util.Map;
@@ -16,6 +17,10 @@ final class ControllerResponses {
     }
 
     static ResponseEntity<?> badRequest(MessagePayload message) {
-        return ResponseEntity.badRequest().body(Map.of("message", message));
+        return status(org.springframework.http.HttpStatus.BAD_REQUEST, message);
+    }
+
+    static ResponseEntity<?> status(HttpStatusCode status, MessagePayload message) {
+        return ResponseEntity.status(status).body(Map.of("message", message));
     }
 }

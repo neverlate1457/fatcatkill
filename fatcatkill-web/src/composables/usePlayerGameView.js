@@ -1,6 +1,7 @@
-﻿import { computed } from 'vue'
+import { computed } from 'vue'
 import { fatcatHorcruxRoles, roleTranslations, translateRole, translateRoleHint } from '../data/roles'
 import { t, translateMessage } from '../i18n'
+import { isVotedPlayerForPhase } from '../utils/voteState'
 
 export const usePlayerGameView = ({
   gameState,
@@ -192,7 +193,7 @@ export const usePlayerGameView = ({
       .sort((a, b) => b.count - a.count || a.playerId - b.playerId)
   })
 
-  const isMyVotedPlayer = (player) => phase.value === 'NOMINATION' && myPlayer.value?.votedTargetId === player.userId
+  const isMyVotedPlayer = (player) => isVotedPlayerForPhase(phase.value, myPlayer.value?.votedTargetId, player?.userId)
 
   const canVoteFor = (player) => {
     if (!canUseDayVote.value || myPlayer.value?.voteConfirmed || !player.alive || player.userId === myPlayer.value?.userId) return false

@@ -9,6 +9,7 @@ import java.util.Optional;
 public interface GameRecordRepository extends JpaRepository<GameRecord, Long> {
     boolean existsByGameId(String gameId);
     Optional<GameRecord> findByGameId(String gameId);
+    Optional<GameRecord> findTopByRoomIdOrderByEndTimeDesc(String roomId);
     List<GameRecord> findAllByOrderByEndTimeDesc();
     long countByGameId(String gameId);
 }

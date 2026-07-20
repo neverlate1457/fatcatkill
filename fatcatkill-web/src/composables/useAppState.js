@@ -96,8 +96,15 @@ export const useAppState = () => {
   }
 
   const clearSavedRoom = () => {
-    const { roomId: ignoredRoomId, ...nextSession } = sessionPayload()
+    const { roomId: ignoredRoomId, userId: ignoredUserId, hostMode: ignoredHostMode, ...nextSession } = sessionPayload()
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSession))
+  }
+
+  const clearRoomIdentity = () => {
+    roomId.value = ''
+    userId.value = ''
+    hostMode.value = false
+    clearSavedRoom()
   }
 
   watch([roomId, userId, nickname, selectedMode, roomSize, hostMode, customDeck, fatcatHintRoles, highRabbitRole, hostMethaneHallucinationTargetId, hostAdvancedOpen], saveSession, { deep: true })
@@ -151,6 +158,7 @@ export const useAppState = () => {
     displayName,
     isLoggedIn,
     saveSession,
-    clearSavedRoom
+    clearSavedRoom,
+    clearRoomIdentity
   }
 }

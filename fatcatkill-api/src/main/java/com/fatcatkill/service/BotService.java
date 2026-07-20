@@ -33,6 +33,43 @@ public class BotService {
         this.systemOutService = systemOutService;
     }
 
+    public int autoPlay(String roomId, Long humanPlayerId) {
+        int steps = 0;
+        GameState before = gameStore.getGame(roomId);
+        if (before == null || before.getStatus() != RoomStatus.PLAYING) return steps;
+
+        if (finishIfOnlyBotsAlive(before)) {
+            return 1;
+        }
+
+        autoPlaySingleStep(roomId, humanPlayerId);
+        steps++;
+
+        GameState latest = gameStore.getGame(roomId);
+        if (finishIfOnlyBotsAlive(latest)) {
+            return steps + 1;
+        }
+        return steps;
+    }
+
+    public boolean finishIfOnlyBotsAlive(GameState game) {
+        if (!onlyBotsAlive(game)) return false;
+
+        gameHelper.finishGame(game, gameHelper.resolveWinnerCamp(game));
+        gameLogService.appendPayload(game, null, "BOT_ONLY_FAST_FORWARD", null, null,
+                MessagePayload.of("backend.bot.onlyBotsFastForward", "Only bots remain. The game was fast-forwarded to the end."));
+        gameStore.saveGame(game);
+        return true;
+    }
+    private boolean onlyBotsAlive(GameState game) {
+        return game != null
+                && game.getStatus() == RoomStatus.PLAYING
+                && game.getPlayers() != null
+                && game.getPlayers().stream().anyMatch(PlayerState::isAlive)
+                && game.getPlayers().stream().filter(PlayerState::isAlive).allMatch(this::isBotPlayer);
+    }
+
+
     public void autoPlaySingleStep(String roomId, Long humanPlayerId) {
         GameState game = gameStore.getGame(roomId);
         if (game == null || game.getStatus() != RoomStatus.PLAYING) return;
@@ -52,7 +89,7 @@ public class BotService {
 
         switch (phase) {
             case STR_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.STR, bot -> alivePlayers.stream()
+                doActionIfBot(roomId, game, humanPlayerId, Role.STR, bot -> alivePlayers.stream()
                         .filter(player -> !player.getUserId().equals(bot.getUserId()))
                         .findAny()
                         .map(target -> {
@@ -80,11 +117,11 @@ public class BotService {
                         String message = nightService.fatcatKill(roomId, bot.getUserId(), targetId);
                         log = new BotActionLog("FATCAT_KILL", targetId, null, message);
                     }
-                    gameLogService.append(game, bot.getUserId(), log.actionType(), log.targetId(), log.targetId2(), log.message());
+                    appendLatest(roomId, bot.getUserId(), log.actionType(), log.targetId(), log.targetId2(), log.message());
                 });
                 break;
             case PH_SERVICE_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.PH_SERVICE, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.PH_SERVICE, bot -> {
                     List<Role> candidates = List.of(
                             Role.METHANE, Role.GUOGUO, Role.XIANGXIANG, Role.AC_CAT,
                             Role.FORVKUSA, Role.HATONG, Role.KB, Role.SALTED_FISH,
@@ -100,19 +137,19 @@ public class BotService {
                 });
                 break;
             case GUOGUO_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.GUOGUO, bot -> new BotActionLog("GUOGUO_ACTION", null, null, nightService.guoguoAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.GUOGUO, bot -> new BotActionLog("GUOGUO_ACTION", null, null, nightService.guoguoAction(roomId, bot.getUserId())));
                 break;
             case FORVKUSA_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.FORVKUSA, bot -> new BotActionLog("FORVKUSA_ACTION", null, null, nightService.forvkusaAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.FORVKUSA, bot -> new BotActionLog("FORVKUSA_ACTION", null, null, nightService.forvkusaAction(roomId, bot.getUserId())));
                 break;
             case HATONG_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.HATONG, bot -> new BotActionLog("HATONG_ACTION", null, null, nightService.hatongAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.HATONG, bot -> new BotActionLog("HATONG_ACTION", null, null, nightService.hatongAction(roomId, bot.getUserId())));
                 break;
             case XIAOXIANG_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.XIAOXIANG, bot -> new BotActionLog("XIAOXIANG_ACTION", null, null, nightService.xiaoxiangAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.XIAOXIANG, bot -> new BotActionLog("XIAOXIANG_ACTION", null, null, nightService.xiaoxiangAction(roomId, bot.getUserId())));
                 break;
             case MUBAIMU_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.MUBAIMU, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.MUBAIMU, bot -> {
                     List<Long> targets = alivePlayers.stream()
                             .filter(player -> !player.getUserId().equals(bot.getUserId()))
                             .limit(3)
@@ -129,7 +166,7 @@ public class BotService {
                 });
                 break;
             case SHUSHU_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.SHUSHU, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.SHUSHU, bot -> {
                     List<Long> targets = alivePlayers.stream()
                             .filter(player -> !player.getUserId().equals(bot.getUserId()))
                             .limit(2)
@@ -142,16 +179,16 @@ public class BotService {
                 });
                 break;
             case GRASS_BEAN_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.GRASS_BEAN, bot -> new BotActionLog("GRASS_BEAN_ACTION", null, null, nightService.grassBeanAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.GRASS_BEAN, bot -> new BotActionLog("GRASS_BEAN_ACTION", null, null, nightService.grassBeanAction(roomId, bot.getUserId())));
                 break;
             case XIANGXIANG_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.XIANGXIANG, bot -> new BotActionLog("XIANGXIANG_ACTION", null, null, nightService.xiangxiangAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.XIANGXIANG, bot -> new BotActionLog("XIANGXIANG_ACTION", null, null, nightService.xiangxiangAction(roomId, bot.getUserId())));
                 break;
             case AC_CAT_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.AC_CAT, bot -> new BotActionLog("AC_CAT_ACTION", null, null, nightService.acCatAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.AC_CAT, bot -> new BotActionLog("AC_CAT_ACTION", null, null, nightService.acCatAction(roomId, bot.getUserId())));
                 break;
             case LIVER_INDEX_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.LIVER_INDEX, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.LIVER_INDEX, bot -> {
                     Long targetId = randomOtherTarget.apply(bot.getUserId());
                     if (targetId == null) return null;
                     nightService.liverHeroAction(roomId, bot.getUserId(), targetId);
@@ -159,7 +196,7 @@ public class BotService {
                 });
                 break;
             case CAN_MAN_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.CAN_MAN, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.CAN_MAN, bot -> {
                     Long targetId = randomOtherTarget.apply(bot.getUserId());
                     if (targetId == null) return null;
                     nightService.canManAction(roomId, bot.getUserId(), targetId);
@@ -167,7 +204,7 @@ public class BotService {
                 });
                 break;
             case NANGONG_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.NANGONG, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.NANGONG, bot -> {
                     Long targetId = randomOtherTarget.apply(bot.getUserId());
                     if (targetId == null) return null;
                     nightService.nangongAction(roomId, bot.getUserId(), targetId);
@@ -175,10 +212,10 @@ public class BotService {
                 });
                 break;
             case ANDY_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.ANDY, bot -> new BotActionLog("ANDY_ACTION", null, null, nightService.andyAction(roomId, bot.getUserId())));
+                doActionIfBot(roomId, game, humanPlayerId, Role.ANDY, bot -> new BotActionLog("ANDY_ACTION", null, null, nightService.andyAction(roomId, bot.getUserId())));
                 break;
             case METHANE_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.METHANE, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.METHANE, bot -> {
                     List<Long> targets = alivePlayers.stream()
                             .filter(player -> !player.getUserId().equals(bot.getUserId()))
                             .limit(2)
@@ -191,7 +228,7 @@ public class BotService {
                 });
                 break;
             case MOCHI_BOSS_ACTION:
-                doActionIfBot(game, humanPlayerId, Role.MOCHI_BOSS, bot -> {
+                doActionIfBot(roomId, game, humanPlayerId, Role.MOCHI_BOSS, bot -> {
                     Long targetId = randomTarget.get();
                     String message = nightService.mochiBossCheckAction(roomId, bot.getUserId(), targetId);
                     return new BotActionLog("MOCHI_BOSS_CHECK", targetId, null, message);
@@ -199,7 +236,7 @@ public class BotService {
                 break;
             case DAY_START:
                 dayService.startVotingPhase(roomId);
-                gameLogService.appendPayload(game, null, "START_NOMINATION", null, null, MessagePayload.of("backend.bot.startNomination", "Bot auto started nomination."));
+                gameLogService.appendPayload(gameStore.getGame(roomId), null, "START_NOMINATION", null, null, MessagePayload.of("backend.bot.startNomination", "Bot auto started nomination."));
                 break;
             case NOMINATION:
                 autoVoteAllBots(roomId, humanPlayerId, GamePhase.NOMINATION, "NOMINATE", randomTarget);
@@ -254,7 +291,7 @@ public class BotService {
         }
     }
 
-    private void doActionIfBot(GameState game, Long humanId, Role targetRole, Function<PlayerState, BotActionLog> action) {
+    private void doActionIfBot(String roomId, GameState game, Long humanId, Role targetRole, Function<PlayerState, BotActionLog> action) {
         game.getPlayers().stream()
                 .filter(p -> p.isAlive() && isBotPlayer(p) && gameHelper.canActAs(game, p, targetRole))
                 .findFirst()
@@ -266,19 +303,18 @@ public class BotService {
 
                     BotActionLog log = action.apply(bot);
                     if (log != null) {
-                        gameLogService.append(game, bot.getUserId(), log.actionType(), log.targetId(), log.targetId2(), log.message());
+                        appendLatest(roomId, bot.getUserId(), log.actionType(), log.targetId(), log.targetId2(), log.message());
                     }
                 });
     }
 
+    private void appendLatest(String roomId, Long playerId, String actionType, Long targetId, Long targetId2, String message) {
+        gameLogService.append(gameStore.getGame(roomId), playerId, actionType, targetId, targetId2, message);
+    }
+
     private boolean isBotPlayer(PlayerState player) {
-        return player.getUsername() != null
-                && (player.getUsername().startsWith("Bot ")
-                || player.getUsername().startsWith("胖貓測試員_"));
+        return player != null && player.isBot();
     }
 
     private record BotActionLog(String actionType, Long targetId, Long targetId2, String message) {}
 }
-
-
-

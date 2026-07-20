@@ -1,4 +1,4 @@
-﻿import { computed } from 'vue'
+import { computed } from 'vue'
 import { socket } from '../socket'
 import { customRoleOptions, volunteerRoleOptions } from '../data/roles'
 import { fatcatHintSlotIndexes, HOST_DECKS_KEY, isDebugMode, modeLabels, nightPhases } from '../config/appConfig'
@@ -10,6 +10,7 @@ import { useGatewayClient } from './useGatewayClient'
 import { useHostObserverView } from './useHostObserverView'
 import { usePlayerGameView } from './usePlayerGameView'
 import { useRoomSetupView } from './useRoomSetupView'
+import { useRoomControls } from './useRoomControls'
 import { historyTimeText, historyWinnerText, useGameHistory } from './useGameHistory'
 import { downloadJson } from '../utils/downloadJson'
 import { t, translateMessage } from '../i18n'
@@ -65,7 +66,8 @@ export const useFatcatApp = () => {
     displayName,
     isLoggedIn,
     saveSession,
-    clearSavedRoom
+    clearSavedRoom,
+    clearRoomIdentity
   } = useAppState()
 
   const { showActionError, clearActionError } = useActionError(actionError, actionNotice)
@@ -99,7 +101,7 @@ export const useFatcatApp = () => {
     clearActionError
   })
 
-  const { submitAuth, logoutAuth, loginAsGuest, requireLogin } = useAuth({
+  const { submitAuth: submitAuthBase, logoutAuth: clearAuthSession, loginAsGuest: loginAsGuestBase, requireLogin } = useAuth({
     gatewayUrl,
     clientId,
     authUser,
@@ -113,6 +115,24 @@ export const useFatcatApp = () => {
     clearActionError
   })
 
+  const syncRoomIdentityAfterAuth = async () => {
+    if (!roomId.value || !socket.connected) return
+    try {
+      await joinSocketRoom({ force: true })
+    } catch (error) {
+      showActionError(error, t('error.joinRoom'))
+    }
+  }
+
+  const submitAuth = async () => {
+    const ok = await submitAuthBase()
+    if (ok) await syncRoomIdentityAfterAuth()
+  }
+
+  const loginAsGuest = async () => {
+    const ok = loginAsGuestBase()
+    if (ok) await syncRoomIdentityAfterAuth()
+  }
   const createHostedRoom = async () => {
     if (!requireLogin()) return
     hostMode.value = true
@@ -292,72 +312,24 @@ export const useFatcatApp = () => {
     roleName
   })
 
-  const emitRoomControl = (eventName, payload = {}) => new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(t('error.gatewayTimeout'))), 10000)
-    socket.emit(eventName, payload, (response) => {
-      window.clearTimeout(timer)
-      if (!response?.ok) {
-        reject(response?.error || new Error(t('error.roomAction')))
-        return
-      }
-      resolve(response)
-    })
+  const {
+    toggleReady,
+    handleSeatClick,
+    confirmKickRoomPlayer,
+    cancelKickRoomPlayer
+  } = useRoomControls({
+    socket,
+    gameState,
+    userId,
+    hostMode,
+    pendingKickPlayer,
+    isPlayerReady,
+    isRoomHost,
+    requestRoomList,
+    showActionError,
+    clearActionError,
+    clearActionNotice
   })
-
-  const toggleReady = async () => {
-    try {
-      await emitRoomControl('setReady', { ready: !isPlayerReady.value })
-      clearActionError()
-      await requestRoomList()
-    } catch (error) {
-      showActionError(error, t('error.updateReady'))
-    }
-  }
-
-  const moveToSeat = async (slot) => {
-    if (slot.player || hostMode.value || gameState.value?.status === 'PLAYING') return
-    try {
-      const response = await emitRoomControl('moveSeat', { seatId: slot.index })
-      if (response?.userId != null) userId.value = String(response.userId)
-      clearActionError()
-      await requestRoomList()
-    } catch (error) {
-      showActionError(error, t('error.moveSeat'))
-    }
-  }
-
-  const kickRoomPlayer = async (player) => {
-    if (!isRoomHost.value || !player || Number(player.userId) === Number(userId.value)) return
-    pendingKickPlayer.value = player
-  }
-
-  const confirmKickRoomPlayer = async () => {
-    const player = pendingKickPlayer.value
-    if (!isRoomHost.value || !player || Number(player.userId) === Number(userId.value)) return
-    try {
-      await emitRoomControl('kickPlayer', { userId: Number(player.userId) })
-      clearActionError()
-      pendingKickPlayer.value = null
-      clearActionNotice()
-      await requestRoomList()
-    } catch (error) {
-      showActionError(error, t('error.kickPlayer'))
-    }
-  }
-
-  const cancelKickRoomPlayer = () => {
-    pendingKickPlayer.value = null
-  }
-
-  const handleSeatClick = (slot) => {
-    if (slot.player) {
-      kickRoomPlayer(slot.player)
-      return
-    }
-    moveToSeat(slot)
-  }
-
-
   const saveHostDeck = () => {
     if (deckValidation.value) { showActionError(deckValidation.value); return }
     const name = deckName.value.trim()
@@ -421,7 +393,6 @@ export const useFatcatApp = () => {
   } : {}
 
   const {
-
     hostPlayerLabel,
     hostVoteRows,
     hostConfirmedVotes,
@@ -653,8 +624,6 @@ export const useFatcatApp = () => {
   const mochiBossCheck = (targetId) => sendSkillAction('MOCHI_BOSS_CHECK', targetId)
   const chenAction = (targetId) => sendSkillAction('CHEN_ACTION', targetId)
   const chenSkip = () => sendSkillAction('CHEN_SKIP', null)
-  const witchAction = (targetId, type) => sendAction('/night/witch', targetId, type)
-  const seerVerify = (targetId) => sendAction('/night/seer', targetId)
   const dayVote = (targetId) => sendAction('/day/vote', targetId)
   const confirmVote = () => sendAction('/day/vote/confirm', myPlayer.value?.votedTargetId || null)
   const cancelVote = () => sendAction('/day/vote/cancel', null)
@@ -697,8 +666,7 @@ export const useFatcatApp = () => {
     isConnected.value = false
     joinedSocketId.value = null
     if (clearRoom) {
-      roomId.value = ''
-      clearSavedRoom()
+      clearRoomIdentity()
     }
   }
 
@@ -723,30 +691,30 @@ export const useFatcatApp = () => {
   const leaveRoom = async () => {
     if (!socket.connected) {
       resetToMain()
-      return
+      return true
     }
 
     try {
-      await new Promise((resolve, reject) => {
-        const timer = window.setTimeout(() => {
-          reject(new Error(t('error.gatewayTimeout')))
-        }, 10000)
-
-        socket.emit('leaveRoom', (response) => {
-          window.clearTimeout(timer)
-          if (!response?.ok) {
-            reject(response?.error || new Error(t('error.leaveRoom')))
-            return
-          }
-          resolve(response)
-        })
-      })
+      const response = await emitWithAck(socket, 'leaveRoom', undefined, t('error.gatewayTimeout'))
+      if (!response?.ok) throw response?.error || new Error(t('error.leaveRoom'))
       resetToMain()
       serverMessage.value = t('room.left')
+      return true
     } catch (error) {
       showActionError(error, t('error.leaveRoom'))
+      return false
     }
   }
+
+  const logoutAuth = async () => {
+    if (isConnected.value || roomId.value) {
+      const leftRoom = await leaveRoom()
+      if (!leftRoom) return
+    }
+    clearAuthSession()
+    resetToMain()
+  }
+
   useSocketEvents({
     socket,
     roomId,
@@ -910,8 +878,6 @@ export const useFatcatApp = () => {
     handleShushuClick,
     handleMethaneClick,
     mochiBossCheck,
-    witchAction,
-    seerVerify,
     chenAction,
     fishAction,
     dayVote,

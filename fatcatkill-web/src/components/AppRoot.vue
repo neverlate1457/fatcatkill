@@ -1,4 +1,6 @@
 <script setup>
+import { ref, watch } from 'vue'
+import FeatureMenu from './FeatureMenu.vue'
 import LoginPanel from './LoginPanel.vue'
 import GameHeader from './GameHeader.vue'
 import GameOverPanel from './GameOverPanel.vue'
@@ -153,8 +155,6 @@ const {
   handleShushuClick,
   handleMethaneClick,
   mochiBossCheck,
-  witchAction,
-  seerVerify,
   chenAction,
   fishAction,
   dayVote,
@@ -177,25 +177,19 @@ const {
   startNomination,
   tallyVotes
 } = useFatcatApp()
-const { language, languages, setLanguage, t, languageLabel } = useI18n()
+const { t } = useI18n()
+const compactUi = ref(globalThis.localStorage?.getItem('fatcatkill.compactUi') === 'true')
+watch(compactUi, (value) => globalThis.localStorage?.setItem('fatcatkill.compactUi', value ? 'true' : 'false'))
 </script>
 
 <template>
-  <main :class="['app-shell', { 'night-mode': isNight, 'day-mode': !isNight && gameState }]">
-    <details class="language-menu">
-      <summary>{{ t('language.label') }} · {{ languageLabel }}</summary>
-      <div class="language-menu-list">
-        <button
-          v-for="item in languages"
-          :key="item.code"
-          type="button"
-          :class="{ active: item.code === language }"
-          @click="setLanguage(item.code)"
-        >
-          {{ t(item.labelKey) }}
-        </button>
-      </div>
-    </details>
+  <main :class="['app-shell', { 'night-mode': isNight, 'day-mode': !isNight && gameState, 'compact-ui': compactUi }]">
+    <FeatureMenu
+      v-model:compact-ui="compactUi"
+      :room-id="roomId"
+      :has-game="Boolean(gameState)"
+      @download-logs="downloadGameLogs"
+    />
     <LoginPanel
       v-if="!isConnected"
       v-model:auth-mode="authMode"
@@ -296,7 +290,6 @@ const { language, languages, setLanguage, t, languageLabel } = useI18n()
         :deck-validation="deckValidation"
         :room-start-status="roomStartStatus"
         :can-start-game="canStartGame"
-        :debug-mode="isDebugMode"
         :test-role-options="testRoleOptions"
         @toggle-ready="toggleReady"
         @refresh-room="fetchRoomState"
@@ -313,7 +306,7 @@ const { language, languages, setLanguage, t, languageLabel } = useI18n()
         v-if="gameState && isObserverMode && gameState.status !== 'WAITING'"
         :title="observerTitle"
         :subtitle="observerSubtitle"
-        :show-bot-button="isDebugMode && isHostSpectator && gameState.status === 'PLAYING'"
+        :show-bot-button="isHostSpectator && gameState.status === 'PLAYING'"
         :bot-action-button-text="botActionButtonText"
         :players="gameState.players"
         :role-name="roleName"
@@ -360,7 +353,6 @@ const { language, languages, setLanguage, t, languageLabel } = useI18n()
         :can-use-chen-action="canUseChenAction"
         :can-use-salted-fish-action="canUseSaltedFishAction"
         :is-room-host="isRoomHost"
-        :debug-mode="isDebugMode"
         :bot-action-button-text="botActionButtonText"
         :can-use-fatcat-team-hint="canUseFatcatTeamHint"
         :fatcat-hint-button-text="fatcatHintButtonText"
@@ -385,8 +377,6 @@ const { language, languages, setLanguage, t, languageLabel } = useI18n()
         @shushu-click="handleShushuClick"
         @methane-click="handleMethaneClick"
         @mochi-boss-check="mochiBossCheck"
-        @witch-action="witchAction"
-        @seer-verify="seerVerify"
         @chen-action="chenAction"
         @fish-action="fishAction"
         @day-vote="dayVote"

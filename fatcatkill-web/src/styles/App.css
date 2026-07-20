@@ -391,75 +391,168 @@ button:disabled {
 }
 
 
-
-
-.language-menu {
+.feature-menu {
   position: fixed;
   top: 14px;
-  right: 14px;
-  z-index: 30;
+  left: 14px;
+  z-index: 40;
   color: #1d2733;
   font-size: 13px;
   font-weight: 800;
 }
 
-.language-menu summary {
-  min-height: 36px;
+.feature-menu summary {
+  min-height: 38px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  padding: 0 13px;
   list-style: none;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.96);
   border: 1px solid #dbe3ea;
   border-radius: 8px;
   box-shadow: 0 8px 22px rgba(21, 31, 45, 0.1);
 }
 
-.language-menu summary::-webkit-details-marker { display: none; }
-.language-menu summary::after { content: '▾'; font-size: 11px; color: #64748b; }
-.language-menu[open] summary::after { content: '▴'; }
+.feature-menu summary::-webkit-details-marker { display: none; }
+.feature-menu summary::after { content: '▾'; font-size: 11px; color: #64748b; }
+.feature-menu[open] summary::after { content: '▴'; }
 
-.language-menu-list {
-  display: grid;
-  gap: 6px;
-  min-width: 150px;
+.feature-panel {
+  width: min(420px, calc(100vw - 28px));
+  max-height: calc(100vh - 72px);
+  overflow: auto;
   margin-top: 8px;
-  padding: 8px;
+  padding: 12px;
   background: #ffffff;
   border: 1px solid #dbe3ea;
   border-radius: 8px;
-  box-shadow: 0 12px 28px rgba(21, 31, 45, 0.14);
+  box-shadow: 0 18px 40px rgba(21, 31, 45, 0.18);
 }
 
-.language-menu-list button {
+.feature-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.feature-tabs button {
   min-height: 34px;
-  padding: 7px 10px;
-  text-align: left;
+  padding: 7px 8px;
   color: #1d2733;
-  background: transparent;
+  background: #eef3f7;
+  font-size: 12px;
 }
 
-.language-menu-list button.active,
-.language-menu-list button:hover { background: #dce6ee; }
+.feature-tabs button.active,
+.feature-tabs button:hover { background: #dce6ee; }
 
-.night-mode .language-menu { color: #edf2f7; }
-.night-mode .language-menu summary,
-.night-mode .language-menu-list {
-  background: rgba(31, 41, 55, 0.96);
+.feature-section,
+.role-guide-list {
+  display: grid;
+  gap: 10px;
+}
+
+.feature-section-title {
+  display: grid;
+  gap: 3px;
+}
+
+.feature-field,
+.feature-toggle {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.feature-toggle {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.feature-toggle input {
+  width: auto;
+}
+
+.role-guide-list {
+  max-height: 380px;
+  overflow: auto;
+}
+
+.role-guide-item,
+.rule-summary-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.role-guide-item p,
+.rule-summary-item p,
+.feature-section small {
+  margin: 0;
+  color: #526173;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.role-guide-item small {
+  color: #64748b;
+  font-family: Consolas, monospace;
+}
+
+.compact-ui .game-board,
+.compact-ui .login-panel {
+  max-width: 920px;
+}
+
+.compact-ui .field,
+.compact-ui .inline-field {
+  margin-top: 10px;
+}
+
+.night-mode .feature-menu { color: #edf2f7; }
+.night-mode .feature-menu summary,
+.night-mode .feature-panel {
+  color: #edf2f7;
+  background: rgba(31, 41, 55, 0.97);
   border-color: rgba(148, 163, 184, 0.25);
 }
-.night-mode .language-menu-list button { color: #edf2f7; }
-.night-mode .language-menu-list button.active,
-.night-mode .language-menu-list button:hover { background: rgba(148, 163, 184, 0.18); }
+.night-mode .feature-tabs button,
+.night-mode .feature-field,
+.night-mode .feature-toggle,
+.night-mode .role-guide-item,
+.night-mode .rule-summary-item {
+  color: #edf2f7;
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(148, 163, 184, 0.25);
+}
+.night-mode .feature-tabs button.active,
+.night-mode .feature-tabs button:hover { background: rgba(148, 163, 184, 0.18); }
+.night-mode .role-guide-item p,
+.night-mode .rule-summary-item p,
+.night-mode .feature-section small { color: #cbd5e1; }
 
 @media (max-width: 640px) {
-  .language-menu {
+  .feature-menu {
     position: static;
-    display: flex;
-    justify-content: flex-end;
     margin-bottom: 12px;
+  }
+
+  .feature-panel {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .feature-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 .debug-panel {

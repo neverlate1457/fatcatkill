@@ -62,8 +62,8 @@ const playerParticipants = (roomId) => Array.from(roomParticipants.get(roomId)?.
   .filter((participant) => !participant.isSpectator)
   .sort((a, b) => Number(a.userId) - Number(b.userId));
 
-const releaseIdentityClaim = (roomId, clientId, userId) => {
-  const claims = roomIdentityClaims.get(roomId);
+const releaseIdentityClaim = (roomId, clientId, userId, claimsByRoom = roomIdentityClaims) => {
+  const claims = claimsByRoom.get(roomId);
   if (!claims) return;
   if (clientId && claims.byClient.get(clientId) === userId) claims.byClient.delete(clientId);
   if (userId != null && claims.byUser.get(userId) === clientId) claims.byUser.delete(userId);
@@ -85,12 +85,10 @@ const allocateSpectatorId = (roomId) => {
   return Date.now();
 };
 
-const allPlayersReady = (roomId) => {
-  const players = playerParticipants(roomId);
-  const hostId = roomHosts.get(roomId);
-  return players.length === 0
-    || players.every((participant) => participant.userId === hostId || participant.ready === true);
-};
+const arePlayersReady = (players, hostId) => players.length === 0
+  || players.every((participant) => participant.userId === hostId || participant.ready === true);
+
+const allPlayersReady = (roomId) => arePlayersReady(playerParticipants(roomId), roomHosts.get(roomId));
 
 const emitRoomIdentity = (socket) => {
   socket.emit('roomIdentityUpdate', {
@@ -137,16 +135,46 @@ const fetchRoomState = async (roomId) => {
   return response.data;
 };
 
-const broadcastRoomState = async (roomId, fallbackData = null) => {
-  let gameState = fallbackData?.gameState || fallbackData;
+const isFinishedGameState = (gameState) => gameState?.status === 'FINISHED' || gameState?.currentPhase === 'GAME_OVER';
+const isRoomSetupOpen = (gameState) => !gameState || gameState.status === 'WAITING';
 
+const ensureRoomSetupOpen = async (roomId, fetchState = fetchRoomState) => {
   try {
-    gameState = await fetchRoomState(roomId);
-  } catch (error) {
-    if (!gameState) {
-      throw error;
+    if (!isRoomSetupOpen(await fetchState(roomId))) {
+      throw gatewayError('gateway.roomSetup.gameAlreadyStarted', {}, 'Room setup is closed after the game starts.');
     }
+  } catch (error) {
+    if (error.response?.status === 404) return;
+    throw error;
   }
+};
+
+const canCloseFinishedRoom = async (httpMethod, pathname, roomId, fetchState = fetchRoomState) => {
+  if (httpMethod !== 'DELETE' || pathname !== `/room/${roomId}`) return false;
+  try {
+    return isFinishedGameState(await fetchState(roomId));
+  } catch (error) {
+    return false;
+  }
+};
+
+const fallbackGameState = (fallbackData = null) => {
+  if (fallbackData?.gameState) return fallbackData.gameState;
+  return fallbackData;
+};
+
+const resolveBroadcastGameState = async (roomId, fallbackData = null, fetchState = fetchRoomState) => {
+  let gameState = fallbackGameState(fallbackData);
+  try {
+    return await fetchState(roomId);
+  } catch (error) {
+    if (!gameState) throw error;
+    return gameState;
+  }
+};
+
+const broadcastRoomState = async (roomId, fallbackData = null) => {
+  const gameState = await resolveBroadcastGameState(roomId, fallbackData);
 
   const roomSockets = await io.in(roomId).fetchSockets();
   for (const roomSocket of roomSockets) {
@@ -155,6 +183,25 @@ const broadcastRoomState = async (roomId, fallbackData = null) => {
   return gameState;
 };
 
+const participantNickname = (payload, userId, fallbackNickname = null) => typeof payload === 'string'
+  ? fallbackNickname
+  : (payload.nickname || fallbackNickname || `Player ${userId}`);
+
+const applyParticipantIdentity = (participant, payload, userId, roomSize, accountId, sessionToken) => {
+  if (!participant) return participant;
+  participant.nickname = participantNickname(payload, userId, participant.nickname);
+  participant.roomSize = roomSize;
+  participant.accountId = Number.isSafeInteger(accountId) && accountId > 0 ? accountId : null;
+  participant.sessionToken = sessionToken || null;
+  return participant;
+};
+const publicRoomParticipant = (participant) => ({
+  userId: participant.userId,
+  nickname: participant.nickname,
+  roomSize: participant.roomSize,
+  isSpectator: Boolean(participant.isSpectator),
+  ready: participant.ready === true
+});
 const getRoomList = () => Array.from(roomParticipants.entries())
   .map(([roomId, participants]) => {
     const connected = Array.from(participants.values());
@@ -164,8 +211,8 @@ const getRoomList = () => Array.from(roomParticipants.entries())
       hostId: roomHosts.get(roomId) ?? null,
       capacity: connected.find((participant) => participant.userId === roomHosts.get(roomId))?.roomSize || 7,
       playerCount: players.length,
-      players,
-      spectators: connected.filter((participant) => participant.isSpectator)
+      players: players.map(publicRoomParticipant),
+      spectators: connected.filter((participant) => participant.isSpectator).map(publicRoomParticipant)
     };
   })
   .filter((room) => room.playerCount > 0 || room.spectators.length > 0)
@@ -301,7 +348,10 @@ io.on('connection', (socket) => {
       for (const participant of existingParticipants.values()) {
         if (participant.clientId !== clientId || participant.socketId === socket.id) continue;
         const oldSocket = io.sockets.sockets.get(participant.socketId);
-        if (oldSocket) oldSocket.disconnect(true);
+        if (oldSocket) {
+          leaveTrackedRoom(oldSocket);
+          oldSocket.disconnect(true);
+        }
       }
     }
 
@@ -316,7 +366,10 @@ io.on('connection', (socket) => {
         && socket.data.userId === userId
         && socket.data.clientId === clientId
         && socket.data.isSpectator === wantsSpectator) {
+      const participant = applyParticipantIdentity(roomParticipants.get(roomId)?.get(socket.id), payload, userId, roomSize, accountId, sessionToken);
+      if (participant) socket.data.nickname = participant.nickname;
       emitRoomIdentity(socket);
+      broadcastRoomList();
       if (typeof ack === 'function') ack({ ok: true, roomId, userId, hostId: roomHosts.get(roomId) ?? userId });
       return;
     }
@@ -325,9 +378,7 @@ io.on('connection', (socket) => {
     claims.byClient.set(clientId, userId);
     claims.byUser.set(userId, clientId);
 
-    const nickname = typeof payload === 'string'
-      ? null
-      : (payload.nickname || `Player ${userId || socket.id.slice(0, 5)}`);
+    const nickname = participantNickname(payload, userId, null) || `Player ${userId || socket.id.slice(0, 5)}`;
 
     socket.join(roomId);
     socket.data.roomId = roomId;
@@ -338,17 +389,16 @@ io.on('connection', (socket) => {
 
     if (!roomParticipants.has(roomId)) roomParticipants.set(roomId, new Map());
     if (!roomHosts.has(roomId)) roomHosts.set(roomId, userId);
-    roomParticipants.get(roomId).set(socket.id, {
+    const participant = applyParticipantIdentity({
       socketId: socket.id,
       clientId,
       userId,
       nickname,
       roomSize,
       isSpectator: wantsSpectator,
-      ready: wantsSpectator,
-      accountId: Number.isSafeInteger(accountId) && accountId > 0 ? accountId : null,
-      sessionToken: sessionToken || null
-    });
+      ready: wantsSpectator
+    }, payload, userId, roomSize, accountId, sessionToken);
+    roomParticipants.get(roomId).set(socket.id, participant);
     broadcastRoomList();
 
     logger.info(`Player ${socket.id} joined room ${roomId} as ${userId}`);
@@ -365,12 +415,13 @@ io.on('connection', (socket) => {
       }
     }
   });
-  socket.on('setReady', (payload = {}, ack) => {
+  socket.on('setReady', async (payload = {}, ack) => {
     try {
       const roomId = socket.data.roomId;
       const participants = roomParticipants.get(roomId);
       const participant = participants?.get(socket.id);
       if (!roomId || !participant) throw gatewayError('gateway.ready.joinRoomFirst', {}, 'Join a room before changing ready state.');
+      await ensureRoomSetupOpen(roomId);
       if (participant.isSpectator) throw gatewayError('gateway.ready.spectatorNoReady', {}, 'Spectators do not need to ready.');
       participant.ready = payload.ready === true;
       broadcastRoomList();
@@ -382,12 +433,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('moveSeat', (payload = {}, ack) => {
+  socket.on('moveSeat', async (payload = {}, ack) => {
     try {
       const roomId = socket.data.roomId;
       const participants = roomParticipants.get(roomId);
       const participant = participants?.get(socket.id);
       if (!roomId || !participant) throw gatewayError('gateway.seat.joinRoomFirst', {}, 'Join a room before moving seats.');
+      await ensureRoomSetupOpen(roomId);
       if (participant.isSpectator) throw gatewayError('gateway.seat.spectatorCannotSeat', {}, 'Spectators cannot occupy player seats.');
       const targetSeat = Number(payload.seatId);
       const capacity = roomCapacity(roomId, participant.roomSize);
@@ -424,11 +476,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('kickPlayer', (payload = {}, ack) => {
+  socket.on('kickPlayer', async (payload = {}, ack) => {
     try {
       const roomId = socket.data.roomId;
       const participants = roomParticipants.get(roomId);
       if (!roomId || !participants) throw gatewayError('gateway.kick.joinRoomFirst', {}, 'Join a room before kicking players.');
+      await ensureRoomSetupOpen(roomId);
       if (roomHosts.get(roomId) !== socket.data.userId) throw gatewayError('gateway.kick.hostOnly', {}, 'Only the room host can kick players.');
       const targetUserId = Number(payload.userId);
       const targetEntry = Array.from(participants.values()).find((participant) => !participant.isSpectator && Number(participant.userId) === targetUserId);
@@ -442,6 +495,7 @@ io.on('connection', (socket) => {
         targetSocket.leave(roomId);
         targetSocket.data.roomId = null;
         targetSocket.data.userId = null;
+        targetSocket.data.isSpectator = false;
       }
       broadcastRoomList();
       if (typeof ack === 'function') ack({ ok: true });
@@ -469,7 +523,10 @@ io.on('connection', (socket) => {
       }
       const isHostRoute = hostOnlyRoute(httpMethod, endpointUrl.pathname);
       if (isHostRoute && roomHosts.get(socket.data.roomId) !== socket.data.userId) {
-        throw gatewayError('gateway.action.hostOnly', {}, 'Only the room host can perform this action.');
+        const canCloseAsParticipant = await canCloseFinishedRoom(httpMethod, endpointUrl.pathname, socket.data.roomId);
+        if (!canCloseAsParticipant) {
+          throw gatewayError('gateway.action.hostOnly', {}, 'Only the room host can perform this action.');
+        }
       }
       if (socket.data.isSpectator && !isHostRoute
           && !(httpMethod === 'GET' && endpointUrl.pathname === `/room/${socket.data.roomId}`)) {
@@ -552,11 +609,20 @@ if (require.main === module) {
 
 module.exports = {
   allowedRoute,
+  arePlayersReady,
   bindActorIdentity,
   hostOnlyRoute,
   connectedPlayersForRoom,
+  publicRoomParticipant,
+  applyParticipantIdentity,
   sanitizeGameState,
   hasFullObserverAccess,
   validateIdentityClaim,
+  releaseIdentityClaim,
+  canCloseFinishedRoom,
+  isFinishedGameState,
+  isRoomSetupOpen,
+  ensureRoomSetupOpen,
+  resolveBroadcastGameState,
   formatErrorMessage
 };

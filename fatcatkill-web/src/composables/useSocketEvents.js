@@ -1,5 +1,5 @@
-﻿import { t, translateMessage } from '../i18n'
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
+import { t, translateMessage } from '../i18n'
 
 export const useSocketEvents = ({
   socket,
@@ -18,49 +18,48 @@ export const useSocketEvents = ({
   showActionError,
   clearActionError
 }) => {
-  onMounted(() => {
-    socket.on('disconnect', () => {
+  const handlers = {
+    disconnect: () => {
       joinedSocketId.value = null
-    })
-
-    socket.on('message', (msg) => {
+    },
+    message: (msg) => {
       serverMessage.value = translateMessage(msg)
-    })
-
-    socket.on('gameStateUpdate', (newState) => {
+    },
+    gameStateUpdate: (newState) => {
       gameState.value = newState
       clearActionError()
-    })
-
-    socket.on('roomListUpdate', (rooms) => {
+    },
+    roomListUpdate: (rooms) => {
       connectedRooms.value = rooms || []
-    })
-
-    if (isLoggedIn.value) loadGameHistory()
-
-    socket.on('roomIdentityUpdate', (identity) => {
+    },
+    roomIdentityUpdate: (identity) => {
       if (identity?.roomId && String(identity.roomId) === String(roomId.value) && identity.userId != null) {
         userId.value = String(identity.userId)
         hostMode.value = identity.spectator === true
         saveSession()
       }
-    })
-
-    socket.on('kickedFromRoom', (payload) => {
+    },
+    kickedFromRoom: (payload) => {
       resetToMain()
       serverMessage.value = translateMessage(payload?.message) || t('room.kicked')
-    })
-
-    socket.on('actionError', (errorMsg) => {
+    },
+    actionError: (errorMsg) => {
       showActionError(translateMessage(errorMsg) || t('error.actionFailed'))
-    })
-
-    socket.on('roomClosed', () => {
+    },
+    roomClosed: () => {
       resetToMain()
       serverMessage.value = t('room.closed')
-    })
+    }
+  }
 
+  onMounted(() => {
+    Object.entries(handlers).forEach(([eventName, handler]) => socket.on(eventName, handler))
+
+    if (isLoggedIn.value) loadGameHistory()
     if (roomId.value) joinRoom()
   })
-}
 
+  onUnmounted(() => {
+    Object.entries(handlers).forEach(([eventName, handler]) => socket.off(eventName, handler))
+  })
+}

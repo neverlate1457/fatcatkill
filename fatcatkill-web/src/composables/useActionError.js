@@ -1,14 +1,25 @@
-import { t, translateMessage } from '../i18n'
+import { t, translateMessage } from '../i18n.js'
+
+const stringifyErrorData = (data) => {
+  if (!data) return ''
+  if (typeof data === 'string') return translateMessage(data)
+  if (data?.message) return translateMessage(data.message)
+  if (data?.error && data?.path) return `${data.error}: ${data.path}`
+  if (data?.error) return String(data.error)
+  try {
+    return JSON.stringify(data)
+  } catch {
+    return String(data)
+  }
+}
 
 export const errorMessage = (error, fallback = t('error.actionFailed')) => {
   const data = error?.response?.data
   if (typeof error === 'string') return translateMessage(error) || fallback
   if (error?.key) return translateMessage(error) || fallback
-  if (typeof data === 'string') return translateMessage(data)
-  if (data?.message) return translateMessage(data.message)
-  if (data?.error && data?.path) return `${data.error}: ${data.path}`
-  if (data?.error) return data.error
-  if (data) return JSON.stringify(data)
+  if (data) return stringifyErrorData(data) || fallback
+  const rawObjectMessage = stringifyErrorData(error)
+  if (rawObjectMessage) return rawObjectMessage
   return translateMessage(error?.message) || fallback
 }
 
@@ -26,4 +37,3 @@ export const useActionError = (actionError, actionNotice = null) => {
 
   return { showActionError, clearActionError }
 }
-

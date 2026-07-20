@@ -38,11 +38,11 @@ public class StartGameController {
         this.userRepository = userRepository;
     }
 
-    // 接收 URL 參數 ?mode=xxx，如果沒傳就預設為 CLASSIC
+    // 接收 URL 參數 ?mode=xxx，如果沒傳就預設為 OLD_HOME
     @PostMapping("/start/{roomId}")
     public ResponseEntity<?> execute(
             @PathVariable String roomId, 
-            @RequestParam(defaultValue = "CLASSIC") String mode,
+            @RequestParam(defaultValue = "OLD_HOME") String mode,
             @RequestBody(required = false) Map<String, Object> payload) {
         try {
             ensureWaitingRoom(roomId, payload);
@@ -101,7 +101,7 @@ public class StartGameController {
         }
     }
     private Long validAccountId(Map<?, ?> playerData) {
-        Long accountId = parseLong(playerData.get("accountId"));
+        Long accountId = parseOptionalLong(playerData.get("accountId"));
         Object rawToken = playerData.get("sessionToken");
         if (accountId == null || rawToken == null || rawToken.toString().isBlank()) return null;
         return userRepository.findByIdAndSessionToken(accountId, rawToken.toString()).isPresent() ? accountId : null;
@@ -114,20 +114,52 @@ public class StartGameController {
         }
         List<Role> roles = new ArrayList<>();
         for (Object value : values) {
-            Role role = parseRole(value);
+            Role role = parseRole(value, "role");
             if (role != null) roles.add(role);
         }
         return roles;
     }
 
     private Role parseRole(Object value) {
+        return parseRole(value, "role");
+    }
+
+    private Role parseRole(Object value, String fieldName) {
         if (value == null || value.toString().isBlank()) return null;
-        return Role.valueOf(value.toString());
+        try {
+            return Role.valueOf(value.toString());
+        } catch (IllegalArgumentException ex) {
+            throw new LocalizedGameException(MessagePayload.of(
+                    "backend.action.invalidRole",
+                    Map.of("role", String.valueOf(value), "field", fieldName),
+                    "Invalid role: " + value + "."
+            ));
+        }
     }
 
     private Long parseLong(Object value) {
         if (value == null || value.toString().isBlank()) return null;
-        return Long.valueOf(value.toString());
+        if (value instanceof Number number) return number.longValue();
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException ex) {
+            throw new LocalizedGameException(MessagePayload.of(
+                    "backend.action.expectedNumericId",
+                    Map.of("field", "id"),
+                    "Expected numeric id."
+            ));
+        }
+    }
+
+
+    private Long parseOptionalLong(Object value) {
+        if (value == null || value.toString().isBlank()) return null;
+        if (value instanceof Number number) return number.longValue();
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private void applyTestRoleAssignments(String roomId, Map<String, Object> payload) {
@@ -147,7 +179,7 @@ public class StartGameController {
                 player.setRole(null);
                 continue;
             }
-            player.setRole(Role.valueOf(rawRole.toString()));
+            player.setRole(parseRole(rawRole, "roleAssignments"));
         }
         gameStore.saveGame(game);
     }

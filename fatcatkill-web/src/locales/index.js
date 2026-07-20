@@ -1,5 +1,5 @@
-import { enTranslations } from './en'
-import { zhTwTranslations } from './zhTW'
+import { enTranslations } from './en.js'
+import { zhTwTranslations } from './zhTW.js'
 
 export const translations = {
   en: enTranslations,

@@ -28,9 +28,7 @@ export const nightPhases = new Set([
   'NANGONG_ACTION',
   'ANDY_ACTION',
   'METHANE_ACTION',
-  'MOCHI_BOSS_ACTION',
-  'WITCH_ACTION',
-  'SEER_VERIFY'
+  'MOCHI_BOSS_ACTION'
 ])
 
 
@@ -61,4 +59,4 @@ export const hostVoteLogTypes = new Set([
   'START_NOMINATION'
 ])
 
-export const methaneExcludedTargetRoles = new Set(['FATCAT', 'WEREWOLF', 'METHANE'])
+export const methaneExcludedTargetRoles = new Set(['FATCAT', 'METHANE'])

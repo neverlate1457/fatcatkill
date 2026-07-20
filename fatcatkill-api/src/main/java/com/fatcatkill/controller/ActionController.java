@@ -1,5 +1,6 @@
 package com.fatcatkill.controller;
 
+import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.Role;
 import com.fatcatkill.model.GameState;
 import com.fatcatkill.model.GameActionPayload;
@@ -8,6 +9,7 @@ import com.fatcatkill.model.MessagePayload;
 import com.fatcatkill.service.BotService;
 import com.fatcatkill.service.GameActionDispatcher;
 import com.fatcatkill.service.GameHelperService;
+import com.fatcatkill.service.LocalizedGameException;
 import com.fatcatkill.service.SystemOutService;
 import com.fatcatkill.service.UnknownGameActionException;
 import com.fatcatkill.store.GameStore;
@@ -36,38 +38,50 @@ public class ActionController {
     }
 
     @PostMapping("/action")
-    public ResponseEntity<?> executeAction(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> executeAction(@RequestBody(required = false) Map<String, Object> payload) {
         try {
+            requirePayload(payload);
             GameActionPayload action = GameActionPayload.from(payload);
             GameState currentGame = gameStore.getGame(action.roomId());
             PlayerState actionPlayer = currentGame == null ? null : gameHelper.getPlayer(currentGame, action.playerId());
             Role illusionRole = roleForAction(action.actionType());
 
-            String resultMessage = gameHelper.isHighRabbitIllusionOf(currentGame, actionPlayer, illusionRole)
+            boolean highRabbitIllusion = gameHelper.isHighRabbitIllusionOf(currentGame, actionPlayer, illusionRole);
+            if (highRabbitIllusion) {
+                validateHighRabbitIllusionPhase(currentGame, action.actionType());
+            }
+
+            String resultMessage = highRabbitIllusion
                     ? "Ability activated."
                     : actionDispatcher.dispatch(action);
 
-            GameState updatedGame = gameStore.getGame(action.roomId());
+            GameState updatedGame = gameOrFallback(action.roomId(), currentGame);
             Object responseMessage = messagePayloadFor(action.actionType(), updatedGame, resultMessage);
-            writeActionLog(action, actionPlayer, resultMessage, responseMessage);
+            writeActionLog(action, currentGame, actionPlayer, resultMessage, responseMessage);
+            botService.finishIfOnlyBotsAlive(gameOrFallback(action.roomId(), currentGame));
 
             if (resultMessage != null) {
-                return ResponseEntity.ok(Map.of(
-                        "gameState", gameStore.getGame(action.roomId()),
-                        "message", responseMessage
-                ));
+                Map<String, Object> response = new HashMap<>();
+                response.put("gameState", gameOrFallback(action.roomId(), currentGame));
+                response.put("message", responseMessage);
+                return ResponseEntity.ok(response);
             }
-            return ResponseEntity.ok(gameStore.getGame(action.roomId()));
+            return ResponseEntity.ok(gameOrFallback(action.roomId(), currentGame));
         } catch (UnknownGameActionException e) {
-            return ResponseEntity.badRequest().body(Map.of("message", MessagePayload.of("backend.action.unknownType", Map.of("actionType", e.getActionType()), e.getMessage())));
+            return ControllerResponses.badRequest(MessagePayload.of("backend.action.unknownType", Map.of("actionType", e.getActionType()), e.getMessage()));
         } catch (Exception e) {
             return ControllerResponses.badRequest(e);
         }
     }
 
-    private void writeActionLog(GameActionPayload action, PlayerState actionPlayer, String resultMessage, Object responseMessage) {
+    private GameState gameOrFallback(String roomId, GameState fallback) {
+        GameState latest = gameStore.getGame(roomId);
+        return latest == null ? fallback : latest;
+    }
+    private void writeActionLog(GameActionPayload action, GameState fallbackGame, PlayerState actionPlayer, String resultMessage, Object responseMessage) {
         try {
             GameState game = gameStore.getGame(action.roomId());
+            if (game == null) game = fallbackGame;
             if (game == null) return;
             String username = actionPlayer == null ? null : actionPlayer.getUsername();
             String roleName = actionPlayer == null || actionPlayer.getRole() == null ? null : actionPlayer.getRole().name();
@@ -104,6 +118,59 @@ public class ActionController {
         }
         return MessagePayload.of("backend.raw", Map.of("text", fallback), fallback);
     }
+
+    private void validateHighRabbitIllusionPhase(GameState game, String actionType) {
+        if (game == null) {
+            throw new LocalizedGameException(MessagePayload.of("backend.game.notActive", "Game is not active."));
+        }
+        GamePhase phase = game.getCurrentPhase();
+        boolean allowed = switch (actionType) {
+            case "FATCAT_KILL", "FATCAT_TEAM_HINT" -> phase == GamePhase.NIGHT_START;
+            case "EMPEROR_REVEAL" -> game.getCurrentRound() == 1 && isNightPhase(phase);
+            case "PH_SERVICE_ACTION" -> phase == GamePhase.PH_SERVICE_ACTION;
+            case "STR_ACTION", "STR_SKIP" -> phase == GamePhase.STR_ACTION;
+            case "GUOGUO_ACTION" -> phase == GamePhase.GUOGUO_ACTION;
+            case "FORVKUSA_ACTION" -> phase == GamePhase.FORVKUSA_ACTION;
+            case "HATONG_ACTION" -> phase == GamePhase.HATONG_ACTION;
+            case "XIAOXIANG_ACTION" -> phase == GamePhase.XIAOXIANG_ACTION;
+            case "MUBAIMU_ACTION" -> phase == GamePhase.MUBAIMU_ACTION;
+            case "SHUSHU_ACTION" -> phase == GamePhase.SHUSHU_ACTION;
+            case "GRASS_BEAN_ACTION" -> phase == GamePhase.GRASS_BEAN_ACTION;
+            case "LIVER_ACTION" -> phase == GamePhase.LIVER_INDEX_ACTION;
+            case "CANMAN_ACTION" -> phase == GamePhase.CAN_MAN_ACTION;
+            case "NANGONG_ACTION" -> phase == GamePhase.NANGONG_ACTION;
+            case "ANDY_ACTION" -> phase == GamePhase.ANDY_ACTION;
+            case "METHANE_CHECK" -> phase == GamePhase.METHANE_ACTION;
+            case "XIANGXIANG_ACTION" -> phase == GamePhase.XIANGXIANG_ACTION;
+            case "AC_CAT_ACTION" -> phase == GamePhase.AC_CAT_ACTION;
+            case "MOCHI_BOSS_CHECK" -> phase == GamePhase.MOCHI_BOSS_ACTION;
+            case "SALTED_FISH_STAB", "SALTED_FISH_SKIP" -> phase == GamePhase.VOTING;
+            case "CHEN_ACTION", "CHEN_SKIP" -> phase == GamePhase.DAY_START;
+            default -> false;
+        };
+        if (!allowed) {
+            throw new LocalizedGameException(MessagePayload.of("backend.game.phaseNotAllowed", "Current phase does not allow this action."));
+        }
+    }
+
+    private boolean isNightPhase(GamePhase phase) {
+        return phase == GamePhase.NIGHT_START
+                || phase == GamePhase.GUOGUO_ACTION
+                || phase == GamePhase.FORVKUSA_ACTION
+                || phase == GamePhase.HATONG_ACTION
+                || phase == GamePhase.XIAOXIANG_ACTION
+                || phase == GamePhase.MUBAIMU_ACTION
+                || phase == GamePhase.SHUSHU_ACTION
+                || phase == GamePhase.GRASS_BEAN_ACTION
+                || phase == GamePhase.AC_CAT_ACTION
+                || phase == GamePhase.XIANGXIANG_ACTION
+                || phase == GamePhase.LIVER_INDEX_ACTION
+                || phase == GamePhase.CAN_MAN_ACTION
+                || phase == GamePhase.NANGONG_ACTION
+                || phase == GamePhase.ANDY_ACTION
+                || phase == GamePhase.METHANE_ACTION
+                || phase == GamePhase.MOCHI_BOSS_ACTION;
+    }
     private Role roleForAction(String actionType) {
         if (actionType == null) return null;
         return switch (actionType) {
@@ -133,39 +200,71 @@ public class ActionController {
     }
 
     @PostMapping("/bot/auto")
-        public ResponseEntity<?> autoPlayBot(@RequestBody Map<String, Object> payload) {
-            try {
-                String roomId = (String) payload.get("roomId");
-                Long humanId = ((Number) payload.get("playerId")).longValue();
+    public ResponseEntity<?> autoPlayBot(@RequestBody(required = false) Map<String, Object> payload) {
+        try {
+            requirePayload(payload);
+            String roomId = requiredString(payload.get("roomId"), "roomId");
+            Long humanId = requiredLong(payload.get("playerId"), "playerId");
 
-                botService.autoPlaySingleStep(roomId, humanId);
-                systemOutService.action(gameStore.getGame(roomId), humanId, "BOT_AUTO", null, null, "Bot auto step requested.");
+            GameState currentGame = gameStore.getGame(roomId);
+            int steps = botService.autoPlay(roomId, humanId);
+            GameState updatedGame = gameOrFallback(roomId, currentGame);
+            systemOutService.action(updatedGame, humanId, "BOT_AUTO", null, null, "Bot auto step requested. steps=" + steps);
 
-                return ResponseEntity.ok(gameStore.getGame(roomId));
-            } catch (Exception e) {
-                return ControllerResponses.badRequest(e);
-            }
+            return ResponseEntity.ok(updatedGame);
+        } catch (Exception e) {
+            return ControllerResponses.badRequest(e);
         }
+    }
+
+
+    private void requirePayload(Map<String, Object> payload) {
+        if (payload == null) {
+            throw new com.fatcatkill.model.InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingPayload", "Missing action payload.")
+            );
+        }
+    }
+
+    private String requiredString(Object value, String fieldName) {
+        String text = value == null ? null : value.toString().trim();
+        if (text == null || text.isBlank()) {
+            throw new com.fatcatkill.model.InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".")
+            );
+        }
+        return text;
+    }
+
+    private Long requiredLong(Object value, String fieldName) {
+        if (value == null) {
+            throw new com.fatcatkill.model.InvalidGameActionPayloadException(
+                    MessagePayload.of("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".")
+            );
+        }
+        if (value instanceof Number number) return number.longValue();
+        throw new com.fatcatkill.model.InvalidGameActionPayloadException(
+                MessagePayload.of("backend.action.expectedNumericId", Map.of("field", fieldName), "Expected numeric id for " + fieldName + ".")
+        );
+    }
+
     @GetMapping("/{roomId}/phase")
-        public ResponseEntity<?> getGamePhase(@PathVariable String roomId) {
-            try {
-
-                GameState game = gameStore.getGame(roomId);
-                if (game == null) {
-                    return ResponseEntity.badRequest().body(Map.of("message", MessagePayload.of("backend.game.notFoundForRoom", Map.of("roomId", roomId), "Game not found for room: " + roomId)));
-                }
-
-
-                Map<String, Object> phaseInfo = new HashMap<>();
-                phaseInfo.put("roomId", game.getRoomId());
-                phaseInfo.put("status", game.getStatus());
-                phaseInfo.put("currentPhase", game.getCurrentPhase());
-                phaseInfo.put("currentRound", game.getCurrentRound());
-
-                return ResponseEntity.ok(phaseInfo);
-
-            } catch (Exception e) {
-                return ControllerResponses.badRequest(e);
+    public ResponseEntity<?> getGamePhase(@PathVariable String roomId) {
+        try {
+            GameState game = gameStore.getGame(roomId);
+            if (game == null) {
+                return ControllerResponses.badRequest(MessagePayload.of("backend.game.notFoundForRoom", Map.of("roomId", roomId), "Game not found for room: " + roomId));
             }
+
+            Map<String, Object> phaseInfo = new HashMap<>();
+            phaseInfo.put("roomId", game.getRoomId());
+            phaseInfo.put("status", game.getStatus());
+            phaseInfo.put("currentPhase", game.getCurrentPhase());
+            phaseInfo.put("currentRound", game.getCurrentRound());
+
+            return ResponseEntity.ok(phaseInfo);
+        } catch (Exception e) {
+            return ControllerResponses.badRequest(e);
         }
+    }
 }

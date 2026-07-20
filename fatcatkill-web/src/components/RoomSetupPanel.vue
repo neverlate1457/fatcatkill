@@ -209,7 +209,7 @@ const emit = defineEmits([
 
     <div v-if="props.isRoomHost" class="button-row">
       <button class="primary-button" :disabled="!props.canStartGame" :title="props.roomStartStatus" @click="emit('start-game')">{{ t('setup.startGame') }}</button>
-      <button v-if="props.debugMode" class="secondary-button" @click="emit('fill-bots')">{{ t('setup.fillBots') }}</button>
+      <button class="secondary-button" @click="emit('fill-bots')">{{ t('setup.fillBots') }}</button>
       <button v-if="props.debugMode" class="secondary-button" @click="emit('create-mock-room')">{{ t('debug.createMockRoom') }}</button>
     </div>
   </section>

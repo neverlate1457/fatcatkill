@@ -41,6 +41,27 @@ class GameActionPayloadTests {
     }
 
     @Test
+    void blankRequiredStringFieldReturnsMessagePayloadException() {
+        assertThatThrownBy(() -> GameActionPayload.from(Map.of(
+                "roomId", "   ",
+                "playerId", 1,
+                "actionType", "FATCAT_KILL"
+        )))
+                .isInstanceOf(InvalidGameActionPayloadException.class)
+                .extracting(error -> ((InvalidGameActionPayloadException) error).getMessagePayload().getKey())
+                .isEqualTo("backend.action.missingField");
+
+        assertThatThrownBy(() -> GameActionPayload.from(Map.of(
+                "roomId", "room-1",
+                "playerId", 1,
+                "actionType", "   "
+        )))
+                .isInstanceOf(InvalidGameActionPayloadException.class)
+                .extracting(error -> ((InvalidGameActionPayloadException) error).getMessagePayload().getKey())
+                .isEqualTo("backend.action.missingField");
+    }
+
+    @Test
     void invalidRoleReturnsMessagePayloadException() {
         assertThatThrownBy(() -> GameActionPayload.from(Map.of(
                 "roomId", "room-1",
@@ -51,5 +72,20 @@ class GameActionPayloadTests {
                 .isInstanceOf(InvalidGameActionPayloadException.class)
                 .extracting(error -> ((InvalidGameActionPayloadException) error).getMessagePayload().getKey())
                 .isEqualTo("backend.action.invalidRole");
+    }
+    @Test
+    void invalidNumericFieldReturnsFieldSpecificMessagePayloadException() {
+        assertThatThrownBy(() -> GameActionPayload.from(Map.of(
+                "roomId", "room-1",
+                "playerId", 1,
+                "actionType", "FATCAT_KILL",
+                "targetId", "not-a-number"
+        )))
+                .isInstanceOf(InvalidGameActionPayloadException.class)
+                .satisfies(error -> {
+                    var message = ((InvalidGameActionPayloadException) error).getMessagePayload();
+                    assertThat(message.getKey()).isEqualTo("backend.action.expectedNumericId");
+                    assertThat(message.getParams()).containsEntry("field", "targetId");
+                });
     }
 }

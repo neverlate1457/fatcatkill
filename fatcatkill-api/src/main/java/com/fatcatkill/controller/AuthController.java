@@ -3,6 +3,7 @@ package com.fatcatkill.controller;
 import com.fatcatkill.entity.User;
 import com.fatcatkill.repository.UserRepository;
 import com.fatcatkill.model.MessagePayload;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,7 +21,9 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import java.util.Base64;
 import java.math.BigInteger;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -35,39 +38,57 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> register(@RequestBody(required = false) Map<String, Object> payload) {
+        if (payload == null) return usernamePasswordRequired();
         String username = normalized(payload.get("username"));
         String password = stringValue(payload.get("password"));
         MessagePayload validation = validateCredentials(username, password);
-        if (validation != null) return ResponseEntity.badRequest().body(Map.of("message", validation));
-        if (userRepository.existsByUsernameIgnoreCase(username)) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", MessagePayload.of("backend.auth.usernameTaken", "Username is already registered.")));
+        if (validation != null) return ControllerResponses.badRequest(validation);
+        String usernameKey = usernameKey(username);
+        if (userRepository.existsByUsernameKey(usernameKey) || userRepository.existsByUsernameIgnoreCase(username)) {
+            return usernameTaken();
         }
 
         User user = new User();
         user.setUsername(username);
+        user.setUsernameKey(usernameKey);
         user.setPassword(hashPassword(password));
         user.setSessionToken(newSessionToken());
-        userRepository.save(user);
+        try {
+            userRepository.save(user);
+        } catch (DataIntegrityViolationException ex) {
+            return usernameTaken();
+        }
         return ResponseEntity.ok(publicUser(user));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> login(@RequestBody(required = false) Map<String, Object> payload) {
+        if (payload == null) return usernamePasswordRequired();
         String username = normalized(payload.get("username"));
         String password = stringValue(payload.get("password"));
         if (username.isBlank() || password.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("message", MessagePayload.of("backend.auth.usernamePasswordRequired", "Username and password are required.")));
+            return usernamePasswordRequired();
         }
 
-        return userRepository.findByUsernameIgnoreCase(username)
+        return findUserForLogin(username)
                 .filter(user -> verifyPassword(password, user.getPassword()))
                 .<ResponseEntity<?>>map(user -> {
+                    if (needsPasswordRehash(user.getPassword())) {
+                        user.setPassword(hashPassword(password));
+                    }
+                    if (user.getUsernameKey() == null || user.getUsernameKey().isBlank()) {
+                        user.setUsernameKey(usernameKey(user.getUsername()));
+                    }
                     user.setSessionToken(newSessionToken());
                     userRepository.save(user);
                     return ResponseEntity.ok(publicUser(user));
                 })
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", MessagePayload.of("backend.auth.invalidCredentials", "Invalid username or password."))));
+                .orElseGet(() -> ControllerResponses.status(HttpStatus.UNAUTHORIZED, MessagePayload.of("backend.auth.invalidCredentials", "Invalid username or password.")));
+    }
+
+    private ResponseEntity<?> usernamePasswordRequired() {
+        return ControllerResponses.badRequest(MessagePayload.of("backend.auth.usernamePasswordRequired", "Username and password are required."));
     }
 
     private Map<String, Object> publicUser(User user) {
@@ -86,6 +107,19 @@ public class AuthController {
         return null;
     }
 
+    private Optional<User> findUserForLogin(String username) {
+        String key = usernameKey(username);
+        return userRepository.findByUsernameKey(key)
+                .or(() -> userRepository.findByUsernameIgnoreCase(username));
+    }
+
+    private ResponseEntity<?> usernameTaken() {
+        return ControllerResponses.status(HttpStatus.CONFLICT, MessagePayload.of("backend.auth.usernameTaken", "Username is already registered."));
+    }
+
+    private String usernameKey(String username) {
+        return username.toLowerCase(Locale.ROOT);
+    }
     private String normalized(Object value) {
         return stringValue(value).trim();
     }
@@ -98,6 +132,10 @@ public class AuthController {
         byte[] token = new byte[32];
         RANDOM.nextBytes(token);
         return String.format("%064x", new BigInteger(1, token));
+    }
+
+    private boolean needsPasswordRehash(String storedPassword) {
+        return storedPassword == null || !storedPassword.startsWith("pbkdf2$" + PBKDF2_ITERATIONS + "$");
     }
 
     private String hashPassword(String password) {
@@ -150,6 +188,3 @@ public class AuthController {
         }
     }
 }
-
-
-

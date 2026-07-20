@@ -9,7 +9,7 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
     show-sql: false
     properties:
       hibernate:
@@ -18,7 +18,8 @@ spring:
 
 server:
   port: ${BACKEND_PORT}
+  address: ${BACKEND_BIND_ADDRESS:127.0.0.1}
 
 fatcatkill:
   debug-actions: ${ENABLE_DEBUG_ACTIONS:false}
-  allowed-origins: ${ALLOWED_ORIGINS:*}
+  allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173}

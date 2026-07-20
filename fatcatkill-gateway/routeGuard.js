@@ -38,7 +38,7 @@ const allowedRoute = (method, pathname, roomId) => {
 
 const hostOnlyRoute = (method, pathname) => method === 'DELETE'
   || pathname === '/game/bot/auto'
-  || /^\/logs\//.test(pathname)
+  || /^\/debug\//.test(pathname)
   || /^\/room\/(?:start|fill-bots|mock)\//.test(pathname)
   || /^\/day\/(?:nomination|tally)\//.test(pathname);
 

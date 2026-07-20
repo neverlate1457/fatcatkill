@@ -1,5 +1,6 @@
 package com.fatcatkill.service;
 
+import com.fatcatkill.enums.Camp;
 import com.fatcatkill.enums.GamePhase;
 import com.fatcatkill.enums.RoomStatus;
 import com.fatcatkill.model.GameState;
@@ -121,8 +122,18 @@ public class GameHelperService {
             return;
         }
 
+        finishGame(game, Camp.VILLAGER);
+    }
+
+    public void finishGame(GameState game, Camp winnerCamp) {
+        if (game == null) return;
+        game.setWinnerCamp(winnerCamp == null ? resolveWinnerCamp(game) : winnerCamp);
         game.setCurrentPhase(GamePhase.GAME_OVER);
         game.setStatus(RoomStatus.FINISHED);
+    }
+
+    public Camp resolveWinnerCamp(GameState game) {
+        return isFatcatAlive(game) ? Camp.WOLF : Camp.VILLAGER;
     }
 
     public void processDelayedDeaths(GameState game) {

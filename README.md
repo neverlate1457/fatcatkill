@@ -24,17 +24,21 @@ POSTGRES_USERNAME=postgres
 POSTGRES_PASSWORD=your_password
 SPRING_DATASOURCE_DOCKER_URL=jdbc:postgresql://host.docker.internal:5432/fatcatkill
 BACKEND_CONTAINER_PORT=8080
+BACKEND_BIND_ADDRESS=127.0.0.1
 GATEWAY_PORT=8091
 GATEWAY_CONTAINER_PORT=3000
 FRONTEND_PORT=5173
 VITE_GATEWAY_URL=
 VITE_ENABLE_DEBUG_MODE=false
 SPRING_PROFILES_ACTIVE=default
+SPRING_JPA_HIBERNATE_DDL_AUTO=update
 ENABLE_DEBUG_ACTIONS=false
 LOG_LEVEL=info
 ```
 
 `host.docker.internal` 代表同一台 NAS 主機。如果 PostgreSQL 位於其他主機，請改成該主機 IP 或 DNS 名稱。Compose 不會建立、刪除或重建 PostgreSQL。
+
+`SPRING_JPA_HIBERNATE_DDL_AUTO` 預設可用 `update` 方便開發；正式資料庫 schema 穩定後建議改成 `validate`，避免啟動時自動修改資料庫結構。
 
 ## 正式部署
 
@@ -47,6 +51,10 @@ docker compose ps
 正式前端：`http://NAS位址:5173`
 
 正式部署請讓 `VITE_GATEWAY_URL` 保持空白。前端會透過同網域的 `/socket.io` 連到 Gateway，因此外網只需公開前端連接埠，不必另外公開 `GATEWAY_PORT`，也能避免 HTTPS mixed content。
+
+若反向代理或防火牆直接公開 Gateway，請把實際前端網址加入 `ALLOWED_ORIGINS`，例如 `https://game.example.com`。一般 Docker Compose 部署只公開前端時，Nginx 會用同源 proxy 轉送 `/socket.io`、`/auth` 與 `/history`。
+
+`GATEWAY_CONTAINER_PORT` 同時會提供給前端 Nginx proxy 使用；若修改此值，請重新建立 gateway 與 frontend 容器。
 
 Backend 不會映射至 NAS 主機，只能由 Gateway 在 Docker 網路內存取。
 
@@ -177,10 +185,18 @@ cd fatcatkill-api
 mvn test
 ```
 
-前端建置：
+Gateway 測試會檢查路由白名單、房間身分宣告與資料遮蔽：
+
+```bash
+cd fatcatkill-gateway
+npm test
+```
+
+前端測試會檢查角色池、翻譯與能力提示是否一致；建置用來確認正式 bundle 可產生：
 
 ```bash
 cd fatcatkill-web
 npm ci
+npm test
 npm run build
 ```

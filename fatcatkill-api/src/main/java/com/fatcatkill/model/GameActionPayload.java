@@ -17,14 +17,14 @@ public record GameActionPayload(
     public static GameActionPayload from(Map<String, Object> payload) {
         if (payload == null) throw invalid("backend.action.missingPayload", "Missing action payload.");
         return new GameActionPayload(
-                string(payload.get("roomId")),
+                requiredString(payload.get("roomId"), "roomId"),
                 longValue(payload.get("playerId"), "playerId"),
-                string(payload.get("actionType")),
+                requiredString(payload.get("actionType"), "actionType"),
                 roleValue(payload.get("targetRole")),
-                optionalLong(payload.get("targetId")),
-                optionalLong(payload.get("targetId1")),
-                optionalLong(payload.get("targetId2")),
-                optionalLong(payload.get("targetId3"))
+                optionalLong(payload.get("targetId"), "targetId"),
+                optionalLong(payload.get("targetId1"), "targetId1"),
+                optionalLong(payload.get("targetId2"), "targetId2"),
+                optionalLong(payload.get("targetId3"), "targetId3")
         );
     }
 
@@ -32,8 +32,10 @@ public record GameActionPayload(
         return targetId != null ? targetId : targetId1;
     }
 
-    private static String string(Object value) {
-        return value == null ? null : String.valueOf(value);
+    private static String requiredString(Object value, String fieldName) {
+        String text = value == null ? null : String.valueOf(value).trim();
+        if (text == null || text.isBlank()) throw invalid("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".");
+        return text;
     }
 
     private static Role roleValue(Object value) {
@@ -45,16 +47,19 @@ public record GameActionPayload(
         }
     }
 
-    private static Long optionalLong(Object value) {
+    private static Long optionalLong(Object value, String fieldName) {
         if (value == null) return null;
-        if (!(value instanceof Number number)) throw invalid("backend.action.expectedNumericId", "Expected numeric id.");
+        if (!(value instanceof Number number)) {
+            throw invalid("backend.action.expectedNumericId", Map.of("field", fieldName), "Expected numeric id for " + fieldName + ".");
+        }
         return number.longValue();
     }
 
     private static Long longValue(Object value, String fieldName) {
         if (value == null) throw invalid("backend.action.missingField", Map.of("field", fieldName), "Missing " + fieldName + ".");
-        return optionalLong(value);
+        return optionalLong(value, fieldName);
     }
+
     private static InvalidGameActionPayloadException invalid(String key, String fallback) {
         return new InvalidGameActionPayloadException(MessagePayload.of(key, fallback));
     }

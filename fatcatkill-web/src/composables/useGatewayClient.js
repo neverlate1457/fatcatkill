@@ -1,4 +1,6 @@
 import { t } from '../i18n'
+import { emitWithAck, SOCKET_ACK_TIMEOUT_MS } from '../utils/socketAck'
+
 export const useGatewayClient = ({
   socket,
   roomId,
@@ -14,9 +16,29 @@ export const useGatewayClient = ({
 }) => {
   const ensureSocketConnected = () => {
     if (socket.connected) return Promise.resolve()
-    return new Promise((resolve) => {
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        globalThis.clearTimeout(timer)
+        socket.off('connect', onConnect)
+        socket.off('connect_error', onError)
+      }
+      const onConnect = () => {
+        cleanup()
+        resolve()
+      }
+      const onError = (error) => {
+        cleanup()
+        reject(error || new Error(t('error.gatewayTimeout')))
+      }
+      const timer = globalThis.setTimeout(() => {
+        cleanup()
+        reject(new Error(t('error.gatewayTimeout')))
+      }, SOCKET_ACK_TIMEOUT_MS)
+
+      socket.once('connect', onConnect)
+      socket.once('connect_error', onError)
       socket.connect()
-      socket.once('connect', resolve)
     })
   }
 
@@ -24,27 +46,19 @@ export const useGatewayClient = ({
     await ensureSocketConnected()
     if (!force && joinedSocketId.value === socket.id) return
 
-    return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error(t('error.joinTimeout'))), 10000)
-      socket.emit('joinRoom', {
-        roomId: roomId.value,
-        userId: userId.value ? Number(userId.value) : null,
-        clientId,
-        nickname: nickname.value.trim(),
-        roomSize: Number(roomSize.value),
-        spectator: hostMode.value,
-        accountId: authUser.value?.guest ? null : authUser.value?.id,
-        sessionToken: authUser.value?.guest ? null : authUser.value?.sessionToken
-      }, (response) => {
-        window.clearTimeout(timer)
-        if (!response?.ok) {
-          reject(response?.error || new Error(t('error.joinRoom')))
-          return
-        }
-        joinedSocketId.value = socket.id
-        resolve(response)
-      })
-    })
+    const response = await emitWithAck(socket, 'joinRoom', {
+      roomId: roomId.value,
+      userId: userId.value ? Number(userId.value) : null,
+      clientId,
+      nickname: nickname.value.trim(),
+      roomSize: Number(roomSize.value),
+      spectator: hostMode.value,
+      accountId: authUser.value?.guest ? null : authUser.value?.id,
+      sessionToken: authUser.value?.guest ? null : authUser.value?.sessionToken
+    }, t('error.joinTimeout'))
+    if (!response?.ok) throw response?.error || new Error(t('error.joinRoom'))
+    joinedSocketId.value = socket.id
+    return response
   }
 
   const requestRoomList = async () => {
@@ -63,17 +77,9 @@ export const useGatewayClient = ({
 
   const emitGameAction = async (endpoint, data, method = 'POST') => {
     await joinSocketRoom()
-    return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error(t('error.gatewayTimeout'))), 10000)
-      socket.emit('gameAction', { roomId: roomId.value, endpoint, data, method }, (response) => {
-        window.clearTimeout(timer)
-        if (!response?.ok) {
-          reject(response?.error || new Error(t('error.actionFailed')))
-          return
-        }
-        resolve(response)
-      })
-    })
+    const response = await emitWithAck(socket, 'gameAction', { roomId: roomId.value, endpoint, data, method }, t('error.gatewayTimeout'))
+    if (!response?.ok) throw response?.error || new Error(t('error.actionFailed'))
+    return response
   }
 
   return {
